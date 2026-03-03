@@ -1,0 +1,151 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Draconis++",
+  "projectDescription": "A modern C++26 cross-platform system information library with plugin support",
+  "theme": "aspen",
+  "primaryColor": "#4A90E2",
+  "lightColor": "#7BB3FF",
+  "darkColor": "#2E5C8A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/type-system",
+              "concepts/error-handling",
+              "concepts/caching"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/build-options",
+              "configuration/precompiled-config",
+              "configuration/runtime-config"
+            ]
+          },
+          {
+            "group": "Platform Support",
+            "pages": [
+              "platforms/overview",
+              "platforms/windows",
+              "platforms/macos",
+              "platforms/linux",
+              "platforms/bsd"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core",
+            "pages": [
+              "api/core/system",
+              "api/core/plugin-manager"
+            ]
+          },
+          {
+            "group": "Services",
+            "pages": [
+              "api/services/packages"
+            ]
+          },
+          {
+            "group": "Utils",
+            "pages": [
+              "api/utils/types",
+              "api/utils/cache-manager",
+              "api/utils/error-handling"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "Development",
+            "pages": [
+              "guides/basic-usage",
+              "guides/advanced-usage",
+              "guides/plugin-development",
+              "guides/platform-implementation"
+            ]
+          },
+          {
+            "group": "CLI Tool",
+            "pages": [
+              "guides/cli/overview",
+              "guides/cli/usage",
+              "guides/cli/customization"
+            ]
+          },
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/basic-info",
+              "examples/custom-layout",
+              "examples/plugin-example"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Contributing",
+        "groups": [
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/overview",
+              "contributing/code-style",
+              "contributing/adding-platforms",
+              "contributing/testing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Cross-platform system information APIs (Windows, macOS, Linux, BSD, Haiku, SerenityOS)",
+    "Modern C++26 with Rust-like type system (Result, Option, custom primitives)",
+    "Plugin system for extensibility (dynamic and static plugins)",
+    "High-performance caching system with configurable policies",
+    "Precompiled configuration for zero-runtime overhead",
+    "Both library SDK and CLI tool"
+  ],
+  "publicApiSurface": [
+    "draconis::core::system::GetMemInfo",
+    "draconis::core::system::GetOperatingSystem",
+    "draconis::core::system::GetDesktopEnvironment",
+    "draconis::core::system::GetWindowManager",
+    "draconis::core::system::GetShell",
+    "draconis::core::system::GetHost",
+    "draconis::core::system::GetCPUModel",
+    "draconis::core::system::GetCPUCores",
+    "draconis::core::system::GetGPUModel",
+    "draconis::core::system::GetKernelVersion",
+    "draconis::core::system::GetDiskUsage",
+    "draconis::core::system::GetUptime",
+    "draconis::core::system::GetOutputs",
+    "draconis::core::system::GetNetworkInterfaces",
+    "draconis::core::system::GetBatteryInfo",
+    "draconis::core::plugin::PluginManager",
+    "draconis::services::packages::GetPackageCount",
+    "draconis::utils::cache::CacheManager"
+  ]
+}
