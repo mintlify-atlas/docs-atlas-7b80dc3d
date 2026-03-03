@@ -1,0 +1,308 @@
+---
+title: Code style guidelines
+description: Code style guidelines and naming conventions for Draconis++
+---
+
+Draconis++ follows specific code style guidelines to maintain consistency across the codebase. All code is formatted using clang-format with a custom configuration.
+
+## General rules
+
+- **C++26 standard** - Use modern C++ features
+- **2-space indentation** - Configured in `.clang-format`
+- **No column limit** - Lines can be as long as needed
+- **`constexpr`/`consteval`** - Use where possible for compile-time evaluation
+- **`noexcept`** - Mark non-throwing functions
+- **`[[nodiscard]]`** - Use for functions whose return value matters
+
+## Naming conventions
+
+| Element | Style | Example |
+|---------|-------|--------|
+| Types/Classes | PascalCase | `SystemInfo`, `CacheManager` |
+| Functions | PascalCase | `GetCpuInfo()`, `GetMemInfo()` |
+| Variables | camelCase | `cpuCount`, `memoryUsage` |
+| Constants | SCREAMING_CASE | `MAX_BUFFER_SIZE`, `DEFAULT_TIMEOUT` |
+| Namespaces | lowercase | `draconis::core`, `draconis::utils` |
+
+### Examples
+
+```cpp
+// Type names use PascalCase
+struct ResourceUsage {
+  u64 usedBytes;
+  u64 totalBytes;
+};
+
+class CacheManager {
+public:
+  // Functions use PascalCase
+  auto GetCachedValue(StringView key) -> Option<String>;
+  auto SetCachedValue(StringView key, String value) -> Result<>;
+  
+private:
+  // Variables use camelCase
+  UnorderedMap<String, String> cacheData;
+  u32 maxCacheSize;
+};
+
+// Constants use SCREAMING_CASE
+constexpr u32 MAX_RETRIES = 3;
+constexpr f64 TIMEOUT_SECONDS = 5.0;
+
+// Namespaces use lowercase
+namespace draconis::core::system {
+  auto GetMemInfo(CacheManager& cache) -> Result<ResourceUsage>;
+}
+```
+
+## Custom type system
+
+Draconis++ uses custom type aliases for improved readability and consistency. Always use these types in new code.
+
+### Primitive types
+
+| Alias | Standard Type | Description |
+|-------|---------------|-------------|
+| `u8` | `std::uint8_t` | 8-bit unsigned integer |
+| `u16` | `std::uint16_t` | 16-bit unsigned integer |
+| `u32` | `std::uint32_t` | 32-bit unsigned integer |
+| `u64` | `std::uint64_t` | 64-bit unsigned integer |
+| `i8` | `std::int8_t` | 8-bit signed integer |
+| `i16` | `std::int16_t` | 16-bit signed integer |
+| `i32` | `std::int32_t` | 32-bit signed integer |
+| `i64` | `std::int64_t` | 64-bit signed integer |
+| `f32` | `float` | 32-bit floating-point |
+| `f64` | `double` | 64-bit floating-point |
+| `usize` | `std::size_t` | Unsigned size type |
+| `isize` | `std::ptrdiff_t` | Signed size type |
+
+### String types
+
+| Alias | Standard Type | Description |
+|-------|---------------|-------------|
+| `String` | `std::string` | Owning string |
+| `StringView` | `std::string_view` | Non-owning string view |
+| `WString` | `std::wstring` | Wide string (Windows) |
+
+### Container types
+
+| Alias | Standard Type | Description |
+|-------|---------------|-------------|
+| `Vec<T>` | `std::vector<T>` | Dynamic array |
+| `Array<T, N>` | `std::array<T, N>` | Fixed-size array |
+| `Span<T>` | `std::span<T>` | Non-owning view of sequence |
+| `Map<K, V>` | `std::map<K, V>` | Ordered map |
+| `UnorderedMap<K, V>` | `std::unordered_map<K, V>` | Hash map |
+| `Pair<T1, T2>` | `std::pair<T1, T2>` | Pair of values |
+
+### Smart pointers
+
+| Alias | Standard Type | Description |
+|-------|---------------|-------------|
+| `UniquePointer<T>` | `std::unique_ptr<T>` | Unique ownership |
+| `SharedPointer<T>` | `std::shared_ptr<T>` | Shared ownership |
+
+### Result types (error handling)
+
+| Alias | Standard Type | Description |
+|-------|---------------|-------------|
+| `Option<T>` | `std::optional<T>` | Value that may be absent |
+| `Result<T, E>` | `std::expected<T, E>` | Value or error |
+| `Err<E>` | `std::unexpected<E>` | Error wrapper for Result |
+| `None` | `std::nullopt` | Empty Option value |
+
+### Type usage guidelines
+
+1. **Always use custom types** in new code
+2. **Import types** in `.cpp` files:
+   ```cpp
+   using namespace draconis::utils::types;
+   ```
+3. **Avoid** `using namespace` in header files - use fully qualified names
+4. **Prefer** `Result<T>` over exceptions for error handling
+
+## Function declarations
+
+Use trailing return type syntax with the `auto` keyword:
+
+```cpp
+// Use trailing return type
+auto GetSystemName() -> Result<String>;
+
+// Mark pure functions as [[nodiscard]]
+[[nodiscard]] auto CalculateHash(StringView input) -> u64;
+
+// Use noexcept when appropriate
+auto SafeOperation() noexcept -> bool;
+
+// Const member functions
+auto GetValue() const -> String;
+```
+
+## Error handling
+
+Prefer `Result<T>` over exceptions for error handling:
+
+```cpp
+// Return Result<T> for operations that can fail
+auto ReadFile(StringView path) -> Result<String> {
+  std::ifstream file(path);
+  if (!file)
+    return Err(DracError("Failed to open file"));
+  
+  String content;
+  // Read file...
+  return content;
+}
+
+// Propagate errors explicitly
+auto ProcessData() -> Result<Data> {
+  auto content = ReadFile("config.toml");
+  if (!content)
+    return Err(content.error());
+  
+  // Process content...
+  return processedData;
+}
+
+// Use Option<T> for values that may be absent
+auto FindUser(StringView username) -> Option<User> {
+  auto it = users.find(username);
+  if (it != users.end())
+    return Some(it->second);
+  return None;
+}
+```
+
+### Helper functions for Result types
+
+```cpp
+// Create an Option with a value
+Option<i32> x = Some(42);
+
+// Create an empty Option
+Option<i32> y = None;
+
+// Return success from a function returning Result
+return Result<String>{"success"};
+
+// Return error from a function returning Result
+return Err(DracError("something went wrong"));
+```
+
+## Code formatting
+
+### Automatic formatting
+
+All code must be formatted using clang-format before submitting:
+
+```bash
+# Format all source files
+just format
+
+# Or use clang-format directly
+clang-format -i src include plugins
+```
+
+### Key formatting rules
+
+The `.clang-format` configuration specifies:
+
+- **Based on Chromium style** with customizations
+- **2-space indentation**
+- **No column limit** - lines can be as long as needed
+- **Attach braces** - opening brace on same line
+- **Align consecutive assignments and declarations**
+- **Block indent for arguments**
+- **Namespace indentation** - all contents indented
+
+### Include order
+
+Headers are automatically organized by clang-format:
+
+1. System headers (`<vector>`, `<string>`)
+2. Draconis++ headers (`"Drac++/Core/System.hpp"`)
+3. Draconis++ utility headers (`"Drac++/Utils/Types.hpp"`)
+4. Local headers (`"LocalFile.hpp"`)
+
+Example:
+
+```cpp
+#include <string>
+#include <vector>
+
+#include "Drac++/Core/System.hpp"
+#include "Drac++/Services/Weather.hpp"
+
+#include "Drac++/Utils/Error.hpp"
+#include "Drac++/Utils/Types.hpp"
+
+#include "LocalImplementation.hpp"
+```
+
+## Best practices
+
+### Use constexpr for compile-time values
+
+```cpp
+// Prefer constexpr for compile-time constants
+constexpr u32 BUFFER_SIZE = 4096;
+constexpr StringView DEFAULT_CONFIG = "config.toml";
+
+// Use constexpr functions when possible
+constexpr auto Square(i32 x) -> i32 {
+  return x * x;
+}
+```
+
+### Mark functions nodiscard appropriately
+
+```cpp
+// Functions returning values that shouldn't be ignored
+[[nodiscard]] auto GetMemInfo() -> Result<ResourceUsage>;
+[[nodiscard]] auto IsValid() const -> bool;
+
+// Functions with side effects don't need nodiscard
+auto ClearCache() -> void;  // No nodiscard needed
+```
+
+### Use noexcept for non-throwing functions
+
+```cpp
+// Mark functions that never throw
+auto GetCachedSize() const noexcept -> usize;
+auto Clear() noexcept -> void;
+```
+
+### Prefer auto for type deduction
+
+```cpp
+// Use auto with trailing return type
+auto GetSystemInfo() -> Result<SystemInfo>;
+
+// Use auto for local variables when type is obvious
+auto memInfo = GetMemInfo();
+auto count = cpuCores.size();
+
+// Be explicit when type isn't obvious from context
+f64 percentage = static_cast<f64>(used) / total;
+```
+
+## Running the linter
+
+Check your code with clang-tidy:
+
+```bash
+just lint
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Adding platforms" icon="computer" href="/contributing/adding-platforms">
+    Learn how to add support for new operating systems
+  </Card>
+  <Card title="Testing" icon="flask" href="/contributing/testing">
+    Write and run tests for your changes
+  </Card>
+</CardGroup>

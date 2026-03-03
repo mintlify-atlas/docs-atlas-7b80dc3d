@@ -1,0 +1,405 @@
+---
+title: Package counting service
+description: API reference for the package counting service that queries system package managers
+---
+
+<Note>
+This service is only available when `DRAC_ENABLE_PACKAGECOUNT` is enabled in your configuration.
+</Note>
+
+## Overview
+
+The package counting service provides functionality to query and count installed packages from various system package managers. It supports multiple package managers across different platforms and uses caching to improve performance.
+
+**Namespace:** `draconis::services::packages`
+
+**Header:** `<Drac++/Services/Packages.hpp>`
+
+## Manager enum
+
+Represents available package managers for package counting.
+
+```cpp
+enum class Manager : types::u8
+```
+
+This enum is used as a bitmask. Individual values can be combined using the bitwise OR operator (`|`).
+
+### Values
+
+| Value | Description | Platform |
+|-------|-------------|----------|
+| `None` | No package manager | All |
+| `Cargo` | Cargo, the Rust package manager | All |
+| `Nix` | Nix package manager | Linux, macOS |
+| `Apk` | apk, the Alpine Linux package manager | Linux |
+| `Dpkg` | dpkg, the Debian package system (used by APT) | Linux |
+| `Moss` | moss, the package manager for AerynOS | Linux |
+| `Pacman` | Pacman, the Arch Linux package manager | Linux |
+| `Rpm` | RPM package manager (Fedora, RHEL, etc.) | Linux |
+| `Xbps` | XBPS, the X Binary Package System (Void Linux) | Linux |
+| `Homebrew` | Homebrew package manager | macOS |
+| `Macports` | MacPorts package manager | macOS |
+| `Winget` | Winget, the Windows Package Manager | Windows |
+| `Chocolatey` | Chocolatey package manager | Windows |
+| `Scoop` | Scoop, command-line installer | Windows |
+| `PkgNg` | pkg, package management system | FreeBSD, DragonFly BSD |
+| `PkgSrc` | pkgsrc package management system | NetBSD |
+| `HaikuPkg` | haikupkg package manager | Haiku OS |
+
+### Operators
+
+<ParamField path="operator|" type="constexpr auto">
+  Combines two Manager flags using bitwise OR.
+  
+  ```cpp
+  constexpr auto operator|(Manager pmA, Manager pmB) -> Manager
+  ```
+</ParamField>
+
+<ParamField path="operator|=" type="constexpr auto">
+  Combines two Manager flags using bitwise OR and assigns the result.
+  
+  ```cpp
+  constexpr auto operator|=(Manager& lhs, Manager rhs) -> Manager&
+  ```
+</ParamField>
+
+### Helper functions
+
+<ParamField path="HasPackageManager" type="constexpr bool">
+  Checks if a specific Manager flag is set in a bitmask.
+  
+  ```cpp
+  constexpr auto HasPackageManager(
+    Manager current_flags,
+    Manager flag_to_check
+  ) -> bool
+  ```
+  
+  <Expandable title="Parameters">
+    <ParamField path="current_flags" type="Manager">
+      The bitmask of currently enabled package manager flags
+    </ParamField>
+    
+    <ParamField path="flag_to_check" type="Manager">
+      The specific package manager flag to check for
+    </ParamField>
+  </Expandable>
+  
+  <ResponseField name="return" type="bool">
+    `true` if the flag is set, `false` otherwise
+  </ResponseField>
+</ParamField>
+
+## PackageManagerInfo struct
+
+Holds information needed to query a database-backed package manager.
+
+```cpp
+struct PackageManagerInfo {
+  types::String id;         // Unique identifier (e.g., "pacman", "dpkg")
+  fs::path      dbPath;     // Filesystem path to the database
+  types::String countQuery; // Query string (e.g., SQL)
+}
+```
+
+<ParamField path="id" type="types::String">
+  Unique identifier for the package manager (used for cache key and logging)
+</ParamField>
+
+<ParamField path="dbPath" type="fs::path">
+  Filesystem path to the database or primary directory
+</ParamField>
+
+<ParamField path="countQuery" type="types::String">
+  Query string (e.g., SQL) or specific file/pattern if not a database
+</ParamField>
+
+## Core functions
+
+### GetTotalCount
+
+Gets the total package count by querying all relevant package managers.
+
+```cpp
+auto GetTotalCount(
+  cache::CacheManager& cache,
+  Manager enabledPackageManagers
+) -> types::Result<types::u64>
+```
+
+<ParamField path="cache" type="cache::CacheManager&">
+  The CacheManager instance to use for caching
+</ParamField>
+
+<ParamField path="enabledPackageManagers" type="Manager">
+  Bitmask of enabled package managers to query
+</ParamField>
+
+<ResponseField name="return" type="types::Result<types::u64>">
+  Result containing the total package count on success, or a DracError if aggregation fails (individual errors are logged)
+</ResponseField>
+
+### GetIndividualCounts
+
+Gets individual package counts from all enabled package managers.
+
+```cpp
+auto GetIndividualCounts(
+  cache::CacheManager& cache,
+  Manager enabledPackageManagers
+) -> types::Result<types::Map<types::String, types::u64>>
+```
+
+<ParamField path="cache" type="cache::CacheManager&">
+  The CacheManager instance to use for caching
+</ParamField>
+
+<ParamField path="enabledPackageManagers" type="Manager">
+  Bitmask of enabled package managers to query
+</ParamField>
+
+<ResponseField name="return" type="types::Result<types::Map<types::String, types::u64>>">
+  Result containing a map of package manager names to their counts on success, or a DracError if all package managers fail
+</ResponseField>
+
+## Query functions
+
+### GetCountFromDb
+
+Gets package count from a database using SQLite.
+
+```cpp
+auto GetCountFromDb(
+  cache::CacheManager& cache,
+  const types::String& pmId,
+  const fs::path& dbPath,
+  const types::String& countQuery
+) -> types::Result<types::u64>
+```
+
+<ParamField path="cache" type="cache::CacheManager&">
+  The CacheManager instance to use for caching
+</ParamField>
+
+<ParamField path="pmId" type="const types::String&">
+  Identifier for the package manager (for logging/cache)
+</ParamField>
+
+<ParamField path="dbPath" type="const fs::path&">
+  Path to the SQLite database file
+</ParamField>
+
+<ParamField path="countQuery" type="const types::String&">
+  SQL query to count packages (e.g., `"SELECT COUNT(*) FROM packages"`)
+</ParamField>
+
+<ResponseField name="return" type="types::Result<types::u64>">
+  Result containing the count or a DracError
+</ResponseField>
+
+### GetCountFromDirectory
+
+Gets package count by iterating entries in a directory. Multiple overloads are available:
+
+#### Full signature
+
+```cpp
+auto GetCountFromDirectory(
+  cache::CacheManager& cache,
+  const types::String& pmId,
+  const fs::path& dirPath,
+  const types::String& fileExtensionFilter,
+  bool subtractOne
+) -> types::Result<types::u64>
+```
+
+<ParamField path="cache" type="cache::CacheManager&">
+  The CacheManager instance to use for caching
+</ParamField>
+
+<ParamField path="pmId" type="const types::String&">
+  Identifier for the package manager (for logging/cache)
+</ParamField>
+
+<ParamField path="dirPath" type="const fs::path&">
+  Path to the directory to iterate
+</ParamField>
+
+<ParamField path="fileExtensionFilter" type="const types::String&">
+  Only count files with this extension (e.g., `".list"`)
+</ParamField>
+
+<ParamField path="subtractOne" type="bool">
+  Whether to subtract one from the final count
+</ParamField>
+
+<ResponseField name="return" type="types::Result<types::u64>">
+  Result containing the count or a DracError
+</ResponseField>
+
+#### Simplified overloads
+
+```cpp
+// With filter only (subtractOne defaults to false)
+auto GetCountFromDirectory(
+  cache::CacheManager& cache,
+  const types::String& pmId,
+  const fs::path& dirPath,
+  const types::String& fileExtensionFilter
+) -> types::Result<types::u64>
+
+// With subtractOne only (no filter)
+auto GetCountFromDirectory(
+  cache::CacheManager& cache,
+  const types::String& pmId,
+  const fs::path& dirPath,
+  bool subtractOne
+) -> types::Result<types::u64>
+
+// Simple directory iteration (no filter, no subtraction)
+auto GetCountFromDirectory(
+  cache::CacheManager& cache,
+  const types::String& pmId,
+  const fs::path& dirPath
+) -> types::Result<types::u64>
+```
+
+<Warning>
+The overload with `bool subtractOne` is prone to misuse due to C++'s implicit conversion rules. A string literal can be implicitly converted to bool. Prefer explicit `String` construction when using the filter overload.
+</Warning>
+
+### GetCountFromDirectoryNoCache
+
+Gets package count by iterating entries in a directory without caching (for internal use).
+
+```cpp
+auto GetCountFromDirectoryNoCache(
+  const types::String& pmId,
+  const fs::path& dirPath,
+  const types::Option<types::String>& fileExtensionFilter,
+  bool subtractOne
+) -> types::Result<types::u64>
+```
+
+<Note>
+This function is for internal use to avoid nested cache calls.
+</Note>
+
+### GetCountFromPlist
+
+Counts installed packages in a plist file (Linux only).
+
+```cpp
+auto GetCountFromPlist(
+  cache::CacheManager& cache,
+  const types::String& pmId,
+  const fs::path& plistPath
+) -> types::Result<types::u64>
+```
+
+<ParamField path="cache" type="cache::CacheManager&">
+  The CacheManager instance to use for caching
+</ParamField>
+
+<ParamField path="pmId" type="const types::String&">
+  Identifier for the package manager (for logging/cache)
+</ParamField>
+
+<ParamField path="plistPath" type="const fs::path&">
+  Path to the plist file
+</ParamField>
+
+<ResponseField name="return" type="types::Result<types::u64>">
+  Result containing the count or a DracError
+</ResponseField>
+
+## Platform-specific count functions
+
+Each package manager has a dedicated count function:
+
+### Linux
+
+```cpp
+auto CountApk(cache::CacheManager& cache) -> types::Result<types::u64>
+auto CountDpkg(cache::CacheManager& cache) -> types::Result<types::u64>
+auto CountMoss(cache::CacheManager& cache) -> types::Result<types::u64>
+auto CountPacman(cache::CacheManager& cache) -> types::Result<types::u64>
+auto CountRpm(cache::CacheManager& cache) -> types::Result<types::u64>
+auto CountXbps(cache::CacheManager& cache) -> types::Result<types::u64>
+```
+
+### macOS
+
+```cpp
+auto GetHomebrewCount(cache::CacheManager& cache) -> types::Result<types::u64>
+auto GetMacPortsCount(cache::CacheManager& cache) -> types::Result<types::u64>
+```
+
+### Windows
+
+```cpp
+auto CountWinGet(cache::CacheManager& cache) -> types::Result<types::u64>
+auto CountChocolatey(cache::CacheManager& cache) -> types::Result<types::u64>
+auto CountScoop(cache::CacheManager& cache) -> types::Result<types::u64>
+```
+
+### BSD
+
+```cpp
+// FreeBSD and DragonFly BSD
+auto GetPkgNgCount(cache::CacheManager& cache) -> types::Result<types::u64>
+
+// NetBSD
+auto GetPkgSrcCount(cache::CacheManager& cache) -> types::Result<types::u64>
+```
+
+### Haiku OS
+
+```cpp
+auto GetSerenityCount(cache::CacheManager& cache) -> types::Result<types::u64>
+```
+
+### Cross-platform
+
+```cpp
+// Linux and macOS
+auto CountNix(cache::CacheManager& cache) -> types::Result<types::u64>
+
+// All platforms
+auto CountCargo(cache::CacheManager& cache) -> types::Result<types::u64>
+```
+
+## Example usage
+
+```cpp
+#include <Drac++/Services/Packages.hpp>
+#include <Drac++/Utils/CacheManager.hpp>
+
+using namespace draconis::services::packages;
+using namespace draconis::utils::cache;
+
+auto main() -> int {
+  CacheManager cache;
+  
+  // Enable multiple package managers
+  Manager managers = Manager::Cargo | Manager::Pacman;
+  
+  // Get total count
+  auto totalResult = GetTotalCount(cache, managers);
+  if (totalResult) {
+    std::cout << "Total packages: " << *totalResult << std::endl;
+  }
+  
+  // Get individual counts
+  auto countsResult = GetIndividualCounts(cache, managers);
+  if (countsResult) {
+    for (const auto& [name, count] : *countsResult) {
+      std::cout << name << ": " << count << std::endl;
+    }
+  }
+  
+  return 0;
+}
+```

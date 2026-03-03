@@ -1,0 +1,970 @@
+---
+title: System information API
+description: Cross-platform system information querying interface
+---
+
+The `draconis::core::system` namespace provides a comprehensive cross-platform interface for querying system information. All functions return a `Result` type that contains either the requested data or an error.
+
+## Memory information
+
+### GetMemInfo
+
+Fetches memory information for the system.
+
+```cpp
+auto GetMemInfo(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::ResourceUsage>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<ResourceUsage>">
+  Returns a `ResourceUsage` struct containing:
+  - `usedBytes`: Currently used memory in bytes
+  - `totalBytes`: Total available memory in bytes
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: `GlobalMemoryStatusEx`
+- **macOS**: `host_statistics64` / `sysctlbyname("hw.memsize")`
+- **Linux**: `sysinfo`
+- **FreeBSD/DragonFly**: `sysctlbyname("hw.physmem")`
+- **NetBSD**: `sysctlbyname("hw.physmem64")`
+- **Haiku**: `get_system_info`
+- **SerenityOS**: Reads from `/sys/kernel/memstat`
+
+**Error conditions:**
+- Platform-specific API calls fail (see source:~/workspace/source/include/Drac++/Core/System.hpp:29-36)
+- On SerenityOS: JSON parsing fails or integer overflow occurs
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<ResourceUsage> memInfo = draconis::core::system::GetMemInfo();
+
+  if (memInfo.has_value()) {
+    std::println("Used: {} bytes", memInfo.value().usedBytes);
+    std::println("Total: {} bytes", memInfo.value().totalBytes);
+  } else {
+    std::println("Failed to get memory info: {}", memInfo.error().message());
+  }
+
+  return 0;
+}
+```
+
+## Operating system information
+
+### GetOperatingSystem
+
+Fetches the operating system version and details.
+
+```cpp
+auto GetOperatingSystem(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::OSInfo>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<OSInfo>">
+  Returns an `OSInfo` struct containing:
+  - `name`: Operating system name
+  - `version`: Operating system version string
+  - `id`: Operating system identifier
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: Reads from registry at `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion`, returns "Windows 11" if `buildNumber >= 22000`
+- **macOS**: Parses `/System/Library/CoreServices/SystemVersion.plist`, matches against known versions
+- **Linux**: Parses `PRETTY_NAME` from `/etc/os-release`
+- **BSD**: Parses `NAME` from `/etc/os-release`, falls back to `uname`
+- **Haiku**: Reads from `/boot/system/lib/libbe.so`
+- **SerenityOS**: `uname`
+
+**Error conditions:**
+- Windows: Registry operations fail or product name is empty
+- macOS: CoreFoundation functions fail or version number is invalid
+- Linux/BSD: Cannot open or parse `/etc/os-release`
+- Haiku: Cannot read version info from system library
+- SerenityOS: `uname` call fails
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<OSInfo> osVersion = draconis::core::system::GetOperatingSystem();
+
+  if (osVersion.has_value()) {
+    std::println("OS: {} {}", osVersion.value().name, osVersion.value().version);
+  } else {
+    std::println("Failed to get OS version: {}", osVersion.error().message());
+  }
+
+  return 0;
+}
+```
+
+## Desktop environment
+
+### GetDesktopEnvironment
+
+Fetches the desktop environment or UI design language.
+
+```cpp
+auto GetDesktopEnvironment(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::String>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<String>">
+  Returns the desktop environment name (e.g., "KDE", "Aqua", "Fluent (Windows 11)")
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: UI design language based on build number from registry
+- **macOS**: Hardcoded to "Aqua"
+- **Haiku**: Hardcoded to "Haiku Desktop Environment"
+- **SerenityOS**: Hardcoded to "SerenityOS Desktop"
+- **Other**: `XDG_CURRENT_DESKTOP` environment variable, falls back to `DESKTOP_SESSION`
+
+**Error conditions:**
+- Windows: Registry read fails or build number parsing fails
+- Other: Environment variables are not set
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<String> desktopEnv = draconis::core::system::GetDesktopEnvironment();
+
+  if (desktopEnv.has_value()) {
+    std::println("Desktop environment: {}", desktopEnv.value());
+  } else {
+    std::println("Failed to get desktop environment: {}", desktopEnv.error().message());
+  }
+
+  return 0;
+}
+```
+
+## Window manager
+
+### GetWindowManager
+
+Fetches the window manager or compositor.
+
+```cpp
+auto GetWindowManager(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::String>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<String>">
+  Returns the window manager name (e.g., "KWin", "yabai", "DWM")
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: "DWM" if composition is enabled, "Windows Manager (Basic)" otherwise
+- **macOS**: Checks process tree for known window managers, falls back to "Quartz"
+- **Haiku**: Hardcoded to "app_server"
+- **SerenityOS**: Hardcoded to "WindowManager"
+- **Other**: Detects X11 or Wayland compositor based on `WAYLAND_DISPLAY` or `DISPLAY` environment variables
+
+**Error conditions:**
+- Windows: `DwmIsCompositionEnabled` fails
+- macOS: `sysctl` call fails or returns invalid data
+- Other: X11/Wayland support is disabled at compile time or detection fails
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<String> windowMgr = draconis::core::system::GetWindowManager();
+
+  if (windowMgr.has_value()) {
+    std::println("Window manager: {}", windowMgr.value());
+  } else {
+    std::println("Failed to get window manager: {}", windowMgr.error().message());
+  }
+
+  return 0;
+}
+```
+
+## Shell
+
+### GetShell
+
+Fetches the active shell.
+
+```cpp
+auto GetShell(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::String>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<String>">
+  Returns the shell name (e.g., "zsh", "bash", "fish")
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: Checks `MSYSTEM`, `SHELL`, or `LOGINSHELL` environment variables, falls back to process tree
+- **SerenityOS**: `getpwuid`
+- **Other**: `SHELL` environment variable
+
+**Error conditions:**
+- Windows: No environment variables are set and process tree check fails
+- SerenityOS: `getpwuid` returns null or shell path is empty
+- Other: `SHELL` environment variable is not set
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<String> shell = draconis::core::system::GetShell();
+
+  if (shell.has_value()) {
+    std::println("Shell: {}", shell.value());
+  } else {
+    std::println("Failed to get shell: {}", shell.error().message());
+  }
+
+  return 0;
+}
+```
+
+## Host information
+
+### GetHost
+
+Fetches the host or hostname.
+
+```cpp
+auto GetHost(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::String>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<String>">
+  Returns the host/product name or hostname
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: Reads from `HKEY_LOCAL_MACHINE\SYSTEM\HardwareConfig\Current`
+- **macOS**: `sysctlbyname("hw.model")` matched against known models
+- **Linux**: Reads from `/sys/class/dmi/id/product_family`, falls back to `/sys/class/dmi/id/product_name`
+- **FreeBSD/DragonFly**: `kenv smbios.system.product`, falls back to `sysctlbyname("hw.model")`
+- **NetBSD**: `sysctlbyname("machdep.dmi.system-product")`
+- **Haiku**: `gethostname`
+- **SerenityOS**: `gethostname`
+
+**Error conditions:**
+- Windows: Registry read fails
+- macOS: `sysctlbyname` fails or model not found in known models
+- Linux: Cannot read DMI product information
+- BSD: System calls fail or return empty strings
+- Haiku/SerenityOS: `gethostname` fails
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<String> host = draconis::core::system::GetHost();
+
+  if (host.has_value()) {
+    std::println("Host: {}", host.value());
+  } else {
+    std::println("Failed to get host: {}", host.error().message());
+  }
+
+  return 0;
+}
+```
+
+## CPU information
+
+### GetCPUModel
+
+Fetches the CPU model string.
+
+```cpp
+auto GetCPUModel(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::String>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<String>">
+  Returns the CPU model string (e.g., "Intel(R) Core(TM) i7-10750H CPU @ 2.60GHz")
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: `__cpuid` (x86) / `RegQueryValueExW` (ARM64)
+- **macOS**: `sysctlbyname("machdep.cpu.brand_string")`
+- **Linux**: `__get_cpuid` (x86) / `/proc/cpuinfo` (ARM64)
+- **Other**: To be implemented
+
+**Error conditions:**
+- Platform-specific CPU detection fails
+- Implementation not available for platform
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<String> cpuModel = draconis::core::system::GetCPUModel();
+
+  if (cpuModel.has_value()) {
+    std::println("CPU model: {}", cpuModel.value());
+  } else {
+    std::println("Failed to get CPU model: {}", cpuModel.error().message());
+  }
+
+  return 0;
+}
+```
+
+### GetCPUCores
+
+Fetches the number of physical and logical CPU cores.
+
+```cpp
+auto GetCPUCores(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::CPUCores>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<CPUCores>">
+  Returns a `CPUCores` struct containing:
+  - `physical`: Number of physical cores
+  - `logical`: Number of logical cores (including hyperthreading)
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: `GetLogicalProcessorInformation`
+- **Other**: To be implemented
+
+**Error conditions:**
+- Platform-specific API calls fail
+- Implementation not available for platform
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<CPUCores> cpuCores = draconis::core::system::GetCPUCores();
+
+  if (cpuCores.has_value()) {
+    std::println("Physical cores: {}", cpuCores.value().physical);
+    std::println("Logical cores: {}", cpuCores.value().logical);
+  } else {
+    std::println("Failed to get CPU cores: {}", cpuCores.error().message());
+  }
+
+  return 0;
+}
+```
+
+## GPU information
+
+### GetGPUModel
+
+Fetches the GPU model string.
+
+```cpp
+auto GetGPUModel(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::String>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<String>">
+  Returns the GPU model string (e.g., "NVIDIA GeForce RTX 3070")
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: DXGI
+- **macOS**: Metal
+- **Other**: To be implemented
+
+**Error conditions:**
+- Windows: DXGI factory creation or adapter enumeration fails
+- macOS: Metal device creation fails
+- Other: Implementation not available for platform
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<String> gpuModel = draconis::core::system::GetGPUModel();
+
+  if (gpuModel.has_value()) {
+    std::println("GPU model: {}", gpuModel.value());
+  } else {
+    std::println("Failed to get GPU model: {}", gpuModel.error().message());
+  }
+
+  return 0;
+}
+```
+
+## Kernel information
+
+### GetKernelVersion
+
+Fetches the kernel version.
+
+```cpp
+auto GetKernelVersion(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::String>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<String>">
+  Returns the kernel version (e.g., "6.14.4", "10.0.22000")
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: Version from `KUSER_SHARED_DATA` (e.g., "10.0.22000")
+- **macOS**: `sysctlbyname("kern.osrelease")` (e.g., "22.3.0")
+- **Haiku**: `get_system_info`
+- **Other Unix-like**: `uname`
+
+**Error conditions:**
+- Windows: Failed to parse kernel shared data
+- macOS: `sysctlbyname` call fails
+- Haiku: `get_system_info` fails
+- Other: `uname` call fails or returns empty string
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<String> kernelVersion = draconis::core::system::GetKernelVersion();
+
+  if (kernelVersion.has_value()) {
+    std::println("Kernel version: {}", kernelVersion.value());
+  } else {
+    std::println("Failed to get kernel version: {}", kernelVersion.error().message());
+  }
+
+  return 0;
+}
+```
+
+## Disk information
+
+### GetDiskUsage
+
+Fetches disk usage for the system drive.
+
+```cpp
+auto GetDiskUsage(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::ResourceUsage>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<ResourceUsage>">
+  Returns a `ResourceUsage` struct containing:
+  - `usedBytes`: Currently used disk space in bytes
+  - `totalBytes`: Total disk space in bytes
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: `GetDiskFreeSpaceExW`
+- **Other**: `statvfs`
+
+**Error conditions:**
+- Platform-specific API calls fail
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<ResourceUsage> diskUsage = draconis::core::system::GetDiskUsage();
+
+  if (diskUsage.has_value()) {
+    std::println("Used: {} bytes", diskUsage.value().usedBytes);
+    std::println("Total: {} bytes", diskUsage.value().totalBytes);
+  } else {
+    std::println("Failed to get disk usage: {}", diskUsage.error().message());
+  }
+
+  return 0;
+}
+```
+
+### GetDisks
+
+Fetches information about all disk drives.
+
+```cpp
+auto GetDisks(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::Vec<utils::types::DiskInfo>>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<Vec<DiskInfo>>">
+  Returns a vector of `DiskInfo` structs, each containing:
+  - `name`: Drive/device name (e.g., "C:", "/dev/sda1")
+  - `mountPoint`: Mount path (e.g., "C:\", "/home")
+  - `filesystem`: Filesystem type (e.g., "NTFS", "ext4", "APFS")
+  - `driveType`: Drive type (e.g., "Fixed", "Removable", "Network")
+  - `totalBytes`: Total capacity in bytes
+  - `usedBytes`: Used space in bytes
+  - `isSystemDrive`: Whether this is the system/boot drive
+</ResponseField>
+
+### GetSystemDisk
+
+Fetches information about the system/boot disk.
+
+```cpp
+auto GetSystemDisk(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::DiskInfo>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<DiskInfo>">
+  Returns a `DiskInfo` struct for the system disk
+</ResponseField>
+
+### GetDiskByPath
+
+Fetches information about the disk containing a specific path.
+
+```cpp
+auto GetDiskByPath(
+  const utils::types::String& path,
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::DiskInfo>
+```
+
+<ParamField path="path" type="const String&">
+  File system path to query
+</ParamField>
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<DiskInfo>">
+  Returns a `DiskInfo` struct for the disk containing the specified path
+</ResponseField>
+
+## Uptime
+
+### GetUptime
+
+Fetches the system uptime.
+
+```cpp
+auto GetUptime() -> utils::types::Result<std::chrono::seconds>
+```
+
+<ResponseField name="return" type="Result<std::chrono::seconds>">
+  Returns the system uptime in seconds
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: `GetTickCount64`
+- **macOS**: `sysctlbyname("kern.boottime")`
+- **Other**: To be implemented
+
+**Error conditions:**
+- Platform-specific API calls fail
+- Implementation not available for platform
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<std::chrono::seconds> uptime = draconis::core::system::GetUptime();
+
+  if (uptime.has_value()) {
+    std::println("Uptime: {} seconds", uptime.value().count());
+  } else {
+    std::println("Failed to get uptime: {}", uptime.error().message());
+  }
+
+  return 0;
+}
+```
+
+## Display information
+
+### GetOutputs
+
+Fetches information about all displays/monitors.
+
+```cpp
+auto GetOutputs(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::Vec<utils::types::DisplayInfo>>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<Vec<DisplayInfo>>">
+  Returns a vector of `DisplayInfo` structs, each containing:
+  - `id`: Display identifier
+  - `resolution.width`: Width in pixels
+  - `resolution.height`: Height in pixels
+  - `refreshRate`: Refresh rate in Hz
+  - `isPrimary`: Whether this is the primary display
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: `GetDisplayConfigBufferSizes`
+- **macOS**: `CGGetActiveDisplayList`
+- **Other**: To be implemented
+
+**Error conditions:**
+- Platform-specific API calls fail
+- Implementation not available for platform
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<Vec<DisplayInfo>> outputs = draconis::core::system::GetOutputs();
+
+  if (outputs.has_value()) {
+    std::println("Outputs: {}", outputs.value().size());
+  } else {
+    std::println("Failed to get outputs: {}", outputs.error().message());
+  }
+
+  return 0;
+}
+```
+
+### GetPrimaryOutput
+
+Fetches information about the primary display.
+
+```cpp
+auto GetPrimaryOutput(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::DisplayInfo>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<DisplayInfo>">
+  Returns a `DisplayInfo` struct for the primary display
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: `GetDisplayConfigBufferSizes`
+- **macOS**: `CGGetActiveDisplayList`
+- **Other**: To be implemented
+
+**Error conditions:**
+- Platform-specific API calls fail
+- No primary display found
+- Implementation not available for platform
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<DisplayInfo> primaryOutput = draconis::core::system::GetPrimaryOutput();
+
+  if (primaryOutput.has_value()) {
+    std::println("Primary output: {}x{}", 
+      primaryOutput.value().resolution.width,
+      primaryOutput.value().resolution.height);
+  } else {
+    std::println("Failed to get primary output: {}", primaryOutput.error().message());
+  }
+
+  return 0;
+}
+```
+
+## Network information
+
+### GetNetworkInterfaces
+
+Fetches information about all network interfaces.
+
+```cpp
+auto GetNetworkInterfaces(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::Vec<utils::types::NetworkInterface>>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<Vec<NetworkInterface>>">
+  Returns a vector of `NetworkInterface` structs, each containing:
+  - `name`: Interface name
+  - `ipv4Address`: IPv4 address (optional)
+  - `ipv6Address`: IPv6 address (optional)
+  - `macAddress`: MAC address (optional)
+  - `isUp`: Whether the interface is up
+  - `isLoopback`: Whether the interface is a loopback interface
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: `GetAdaptersAddresses`
+- **macOS**: `getifaddrs`
+- **Other**: To be implemented
+
+**Error conditions:**
+- Platform-specific API calls fail
+- Implementation not available for platform
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<Vec<NetworkInterface>> networkInterfaces = 
+    draconis::core::system::GetNetworkInterfaces();
+
+  if (networkInterfaces.has_value()) {
+    std::println("Network interfaces: {}", networkInterfaces.value().size());
+  } else {
+    std::println("Failed to get network interfaces: {}", 
+      networkInterfaces.error().message());
+  }
+
+  return 0;
+}
+```
+
+### GetPrimaryNetworkInterface
+
+Fetches information about the primary network interface.
+
+```cpp
+auto GetPrimaryNetworkInterface(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::NetworkInterface>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<NetworkInterface>">
+  Returns a `NetworkInterface` struct for the primary interface
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: `GetAdaptersAddresses`
+- **macOS**: `getifaddrs`
+- **Other**: To be implemented
+
+**Error conditions:**
+- Platform-specific API calls fail
+- No primary interface found
+- Implementation not available for platform
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<NetworkInterface> primaryNetworkInterface = 
+    draconis::core::system::GetPrimaryNetworkInterface();
+
+  if (primaryNetworkInterface.has_value()) {
+    std::println("Primary network interface: {}", 
+      primaryNetworkInterface.value().name);
+  } else {
+    std::println("Failed to get primary network interface: {}", 
+      primaryNetworkInterface.error().message());
+  }
+
+  return 0;
+}
+```
+
+## Battery information
+
+### GetBatteryInfo
+
+Fetches battery information.
+
+```cpp
+auto GetBatteryInfo(
+  utils::cache::CacheManager& cache
+) -> utils::types::Result<utils::types::Battery>
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<Battery>">
+  Returns a `Battery` struct containing:
+  - `status`: Battery status (Unknown, Charging, Discharging, Full, NotPresent)
+  - `percentage`: Battery charge percentage 0-100 (optional)
+  - `timeRemaining`: Estimated time remaining in seconds (optional)
+</ResponseField>
+
+**Platform implementation:**
+- **Windows**: `GetSystemPowerStatus`
+- **macOS**: `IOPSGetPowerSourceState`
+- **Other**: To be implemented
+
+**Error conditions:**
+- Platform-specific API calls fail
+- Implementation not available for platform
+
+**Example:**
+
+```cpp
+#include <print>
+#include <Drac++/Core/System.hpp>
+
+int main() {
+  Result<Battery> batteryInfo = draconis::core::system::GetBatteryInfo();
+
+  if (batteryInfo.has_value()) {
+    if (batteryInfo.value().percentage.has_value()) {
+      std::println("Battery: {}%", *batteryInfo.value().percentage);
+    }
+  } else {
+    std::println("Failed to get battery info: {}", batteryInfo.error().message());
+  }
+
+  return 0;
+}
+```
+
+## Linux-specific functions
+
+### GetDistroID
+
+Fetches the Linux distribution ID (Linux only).
+
+```cpp
+// Only available on Linux
+#ifdef __linux__
+namespace draconis::core::system::linux {
+  auto GetDistroID(
+    utils::cache::CacheManager& cache
+  ) -> utils::types::Result<utils::types::String>
+}
+#endif
+```
+
+<ParamField path="cache" type="utils::cache::CacheManager&">
+  Cache manager for storing results
+</ParamField>
+
+<ResponseField name="return" type="Result<String>">
+  Returns the distribution ID from `/etc/os-release`
+</ResponseField>
+
+**Platform implementation:**
+- Obtained from `/etc/os-release`
+
+**Error conditions:**
+- Cannot open or parse `/etc/os-release`
+- Distribution ID field is missing

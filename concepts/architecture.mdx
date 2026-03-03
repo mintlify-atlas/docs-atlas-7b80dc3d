@@ -1,0 +1,181 @@
+---
+title: Architecture
+description: Library architecture, layers, and design principles
+---
+
+Draconis++ follows a layered architecture designed for clarity, maintainability, and cross-platform compatibility.
+
+## Layered structure
+
+The project is organized into three main layers:
+
+```
+include/Drac++/     — Public API (headers)
+├── Core/           — System data structures
+├── Services/       — Service interfaces
+└── Utils/          — Type aliases, error handling
+
+src/Lib/            — Library implementation
+├── Core/           — Cross-platform code
+├── OS/             — Platform-specific code
+├── Services/       — External integrations
+└── Wrappers/       — Third-party wrappers
+
+src/CLI/            — Command-line interface
+├── Config/         — TOML parsing
+├── Core/           — SystemInfo aggregator
+└── UI/             — Terminal output
+```
+
+### Public API layer
+
+Location: `include/Drac++/`
+
+Headers exposed to library consumers that define the stable interface:
+
+- **Core/**: System data structures (`System.hpp`, `Package.hpp`)
+- **Services/**: Service interfaces for external data (weather, packages)
+- **Utils/**: Type aliases, error handling, macros
+
+### Library implementation layer
+
+Location: `src/Lib/`
+
+Core library containing platform-agnostic and platform-specific code:
+
+- **Core/**: Cross-platform implementations
+- **OS/**: Platform-specific code (Windows, Linux, macOS, BSD, etc.)
+- **Services/**: External service integrations
+- **Wrappers/**: Thin wrappers around third-party libraries
+
+### CLI layer
+
+Location: `src/CLI/`
+
+User-facing application that consumes the library:
+
+- **Config/**: TOML configuration parsing and management
+- **Core/**: `SystemInfo` class that aggregates all system data
+- **UI/**: Terminal output formatting and theming
+
+## Design principles
+
+### Cross-platform by design
+
+Platform-specific code lives in `src/Lib/OS/` with dedicated files for each platform:
+
+| File | Platform |
+|------|----------|
+| `Windows.cpp` | Windows 10/11 |
+| `Linux.cpp` | Linux (glibc/musl) |
+| `macOS.cpp` | macOS 12+ |
+| `BSD.cpp` | FreeBSD, OpenBSD, NetBSD |
+| `Haiku.cpp` | Haiku OS |
+| `Serenity.cpp` | SerenityOS |
+
+<Note>
+  Each platform implements the same interface defined in the public API layer, allowing seamless cross-platform usage.
+</Note>
+
+### Type safety first
+
+Draconis++ uses custom type aliases that provide:
+
+1. **Consistency**: Uniform naming across the codebase
+2. **Expressiveness**: Types like `Option<T>` and `Result<T>` convey intent
+3. **Safety**: Wrapper types prevent common errors
+4. **Familiar ergonomics**: Rust-like patterns for clarity
+
+See [Type system](/concepts/type-system) for details.
+
+### Error handling without exceptions
+
+The library prefers `Result<T>` types over exceptions for predictable, explicit error handling:
+
+```cpp
+auto GetMemInfo() -> Result<ResourceUsage>;
+auto GetOSVersion() -> Result<OSInfo>;
+```
+
+See [Error handling](/concepts/error-handling) for details.
+
+### Performance through caching
+
+The `CacheManager` system provides:
+
+- In-memory caching for frequently accessed data
+- Persistent disk caching with TTL support
+- Configurable cache policies per operation
+- Thread-safe access
+
+See [Caching](/concepts/caching) for details.
+
+## Adding platform-specific code
+
+When implementing new system information functions:
+
+1. **Declare in header** (`include/Drac++/Core/System.hpp`):
+
+```cpp
+namespace draconis::core {
+  auto GetBatteryLevel() -> Result<u8>;
+}
+```
+
+2. **Implement per-platform** (e.g., `src/Lib/OS/Windows.cpp`):
+
+```cpp
+namespace draconis::core {
+  auto GetBatteryLevel() -> Result<u8> {
+    SYSTEM_POWER_STATUS status;
+    if (!GetSystemPowerStatus(&status))
+      return Err(DracError("Failed to get power status"));
+    return status.BatteryLifePercent;
+  }
+}
+```
+
+3. **Implement for other platforms** with the same signature
+
+<Tip>
+  Use preprocessor guards when mixing platform-specific implementations in the same file:
+  
+  ```cpp
+  #ifdef __linux__
+  // Linux implementation
+  #elifdef _WIN32
+  // Windows implementation
+  #endif
+  ```
+</Tip>
+
+## Platform detection macros
+
+The build system defines these macros for conditional compilation:
+
+| Macro | Condition |
+|-------|----------|
+| `DRAC_ARCH_X86_64` | x86_64 architecture |
+| `DRAC_ARCH_AARCH64` | ARM64 architecture |
+| `DRAC_ARCH_64BIT` | 64-bit pointer size |
+| `DRAC_DEBUG` | Debug build |
+
+## Platform-specific notes
+
+### Windows
+
+- Use `WString` for Windows API calls requiring `wchar_t*`
+- Convert with `ConvertWStringToUTF8()` / `ConvertUTF8ToWString()`
+- Link against: `dwmapi`, `windowsapp`, `setupapi`, `dxgi`
+
+### macOS
+
+- Objective-C++ code goes in `src/Lib/OS/macOS/`
+- Use `.mm` extension for Objective-C++ files
+- Link frameworks via `appleframeworks` dependency
+
+### Linux
+
+- Optional dependencies: `xcb`, `wayland-client`, `dbus-1`, `pugixml`
+- Check feature flags: `DRAC_USE_XCB`, `DRAC_USE_WAYLAND`
+- Read system info from `/proc/`, `/sys/`, `/etc/`

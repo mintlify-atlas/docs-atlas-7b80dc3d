@@ -1,0 +1,350 @@
+---
+title: Installation
+description: Install Draconis++ using Meson, vcpkg, or Nix
+---
+
+## Prerequisites
+
+<Note>
+  Draconis++ requires **C++26** support. We recommend **Clang 21+** or the latest compiler toolchain.
+</Note>
+
+### Required tools
+
+- **Meson** ≥1.1
+- **Ninja** (build backend)
+- **pkg-config** (for dependency discovery)
+- **C++26-capable compiler**:
+  - Clang 21+ (recommended)
+  - GCC 15+ (experimental)
+  - MSVC with `/std:c++latest` (Windows)
+
+### Platform-specific dependencies
+
+<Tabs>
+  <Tab title="Linux">
+    **Required:**
+    ```bash
+    # Debian/Ubuntu
+    sudo apt install meson ninja-build pkg-config clang-21
+    
+    # Arch Linux
+    sudo pacman -S meson ninja pkgconf clang
+    
+    # Fedora
+    sudo dnf install meson ninja-build pkgconfig clang
+    ```
+    
+    **Optional (for display/window manager detection):**
+    ```bash
+    # XCB (X11 support)
+    sudo apt install libxcb1-dev libxcb-randr0-dev libxau-dev libxdmcp-dev
+    
+    # Wayland support
+    sudo apt install libwayland-dev
+    
+    # pugixml (for Void Linux XBPS metadata)
+    sudo apt install libpugixml-dev
+    ```
+  </Tab>
+  
+  <Tab title="macOS">
+    ```bash
+    # Using Homebrew
+    brew install meson ninja pkg-config llvm@21
+    
+    # Add LLVM to PATH
+    export PATH="/opt/homebrew/opt/llvm@21/bin:$PATH"
+    ```
+    
+    <Note>
+      macOS requires SDK 15.0+ (macOS 14.0+). The build system automatically configures this.
+    </Note>
+  </Tab>
+  
+  <Tab title="Windows">
+    **Using vcpkg (recommended):**
+    ```powershell
+    # Install dependencies
+    vcpkg install asio curl magic-enum mimalloc
+    
+    # Install Meson via Python pip
+    pip install meson ninja
+    ```
+    
+    **Or using Chocolatey:**
+    ```powershell
+    choco install meson ninja pkgconfiglite llvm
+    ```
+    
+    <Warning>
+      On Windows, use the `windows-clang.ini` cross-file for Clang builds.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Installation methods
+
+### Method 1: Meson build (recommended)
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/yourusername/draconis++.git
+    cd draconis++
+    ```
+  </Step>
+  
+  <Step title="Configure the build">
+    ```bash
+    meson setup build
+    ```
+    
+    **Common configuration options:**
+    
+    ```bash
+    # Disable examples and tests
+    meson setup build -Dbuild_examples=false -Dbuild_tests=false
+    
+    # Enable precompiled configuration
+    meson setup build -Dprecompiled_config=true
+    
+    # Build with static plugins (requires plugins repo)
+    meson setup build -Dprecompiled_config=true -Dstatic_plugins=weather
+    
+    # Release build with optimizations
+    meson setup build --buildtype=release
+    
+    # Disable package counting feature
+    meson setup build -Dpackagecount=disabled
+    ```
+    
+    See [Configuration](/configuration/build-options) for all available options.
+  </Step>
+  
+  <Step title="Compile">
+    ```bash
+    meson compile -C build
+    ```
+    
+    Or using the provided justfile:
+    ```bash
+    just build
+    ```
+  </Step>
+  
+  <Step title="Run the CLI (optional)">
+    ```bash
+    ./build/src/CLI/draconis++
+    ```
+  </Step>
+  
+  <Step title="Install system-wide (optional)">
+    ```bash
+    meson install -C build
+    ```
+  </Step>
+</Steps>
+
+### Method 2: vcpkg integration
+
+Draconis++ provides a `vcpkg.json` manifest for dependency management.
+
+<Steps>
+  <Step title="Set up vcpkg">
+    ```bash
+    git clone https://github.com/microsoft/vcpkg.git
+    cd vcpkg
+    ./bootstrap-vcpkg.sh  # or bootstrap-vcpkg.bat on Windows
+    ```
+  </Step>
+  
+  <Step title="Clone and configure with vcpkg">
+    ```bash
+    cd draconis++
+    meson setup build --wrap-mode=forcefallback
+    ```
+    
+    Meson will automatically use vcpkg to fetch dependencies listed in `vcpkg.json`:
+    - asio
+    - curl
+    - magic-enum
+    - mimalloc
+  </Step>
+  
+  <Step title="Build">
+    ```bash
+    meson compile -C build
+    ```
+  </Step>
+</Steps>
+
+### Method 3: Nix flake
+
+<Note>
+  The Nix flake provides a fully reproducible build environment with all dependencies.
+</Note>
+
+<Steps>
+  <Step title="Enter the dev shell">
+    ```bash
+    nix develop
+    ```
+    
+    This provides:
+    - Clang 21 toolchain
+    - Meson, Ninja, pkg-config
+    - All static dependencies (asio, curl, magic-enum, mimalloc, etc.)
+    - Platform-specific libraries (XCB, Wayland on Linux)
+  </Step>
+  
+  <Step title="Configure and build">
+    ```bash
+    # Clean setup with precompiled config
+    clean
+    
+    # Build
+    build
+    
+    # Or run directly
+    run
+    ```
+    
+    The flake provides these convenience scripts:
+    - `build`: Compile the project
+    - `clean`: Wipe and reconfigure build directory
+    - `run`: Build and execute the CLI
+  </Step>
+  
+  <Step title="Build the Nix package">
+    ```bash
+    nix build
+    ```
+    
+    Result will be in `./result/bin/draconis++`
+  </Step>
+</Steps>
+
+**With static plugins:**
+
+```bash
+# Set the plugins source directory
+export DRACONIS_PLUGINS_SRC=/path/to/plugins
+
+# Enter dev shell
+nix develop
+
+# Configure with static plugins
+clean -Dstatic_plugins=weather
+
+build
+```
+
+## Precompiled configuration
+
+<Info>
+  Precompiled configuration embeds your settings at compile-time for a fully static, portable binary.
+</Info>
+
+When using `-Dprecompiled_config=true`, you need to create `config.hpp` from the example:
+
+```bash
+cp config.example.hpp config.hpp
+```
+
+Edit `config.hpp` to customize:
+- Username display
+- Logo path and protocol (Kitty, iTerm2)
+- Enabled package managers
+- UI layout (which system info rows to display)
+- Static plugin configurations (e.g., weather location)
+
+See the [Configuration guide](/configuration/build-options) for detailed settings.
+
+## Verifying installation
+
+<CodeGroup>
+```bash Linux/macOS
+./build/src/CLI/draconis++ --version
+```
+
+```powershell Windows
+.\build\src\CLI\draconis++.exe --version
+```
+</CodeGroup>
+
+Expected output:
+```
+Draconis++ v0.1.0
+Build date: 2026-03-03
+Git hash: abc1234
+```
+
+## Build options reference
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `build_examples` | boolean | `true` | Build example applications (HTTP/MCP servers) |
+| `build_tests` | boolean | `true` | Build unit tests |
+| `build_cli` | boolean | `true` | Build the CLI application |
+| `packagecount` | feature | `enabled` | Enable package manager counting |
+| `caching` | feature | `enabled` | Enable result caching |
+| `plugins` | feature | `enabled` | Enable plugin system |
+| `precompiled_config` | boolean | `false` | Use compile-time configuration (disables TOML) |
+| `static_plugins` | array | `[]` | List of plugins to statically compile |
+| `xcb` | feature | `enabled` | Use XCB for X11 support (Linux/BSD) |
+| `wayland` | feature | `enabled` | Use Wayland client library (Linux/BSD) |
+| `pugixml` | feature | `auto` | Use pugixml for XBPS metadata (Void Linux) |
+| `default_language` | string | `en` | Default localization language |
+
+See `meson.options` for the complete list.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: C++26 features not supported">
+    Ensure you're using a recent compiler:
+    - Clang 21+
+    - GCC 15+ (experimental)
+    - MSVC with `/std:c++latest`
+    
+    Set your compiler explicitly:
+    ```bash
+    CXX=clang++-21 meson setup build
+    ```
+  </Accordion>
+  
+  <Accordion title="Error: 'config.hpp' not found">
+    When using `-Dprecompiled_config=true`, you must create `config.hpp`:
+    ```bash
+    cp config.example.hpp config.hpp
+    ```
+  </Accordion>
+  
+  <Accordion title="Link errors on macOS">
+    Make sure you're using the Apple SDK 15.0+. The Nix flake handles this automatically:
+    ```bash
+    nix develop
+    ```
+    
+    Or set manually:
+    ```bash
+    export SDKROOT=/path/to/MacOSX.sdk
+    ```
+  </Accordion>
+  
+  <Accordion title="Missing dependencies (magic_enum, glaze, etc.)">
+    Meson will automatically fetch missing dependencies via wrap files in `subprojects/`. Ensure you have internet access during the first build.
+    
+    Force dependency download:
+    ```bash
+    meson setup build --wrap-mode=forcefallback
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<Card title="Quick start guide" icon="rocket" href="/quickstart">
+  Now that Draconis++ is installed, try building your first application
+</Card>

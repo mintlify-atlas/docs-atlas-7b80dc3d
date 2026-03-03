@@ -1,0 +1,490 @@
+---
+title: Advanced usage
+description: Advanced patterns and techniques for Draconis++
+---
+
+This guide covers advanced usage patterns, performance optimization, and complex integration scenarios.
+
+## Building a web server with Draconis++
+
+Integrate Draconis++ with HTTP servers to expose system information via REST APIs:
+
+```cpp
+#include <glaze/net/http_server.hpp>
+#include <Drac++/Core/System.hpp>
+#include <Drac++/Utils/CacheManager.hpp>
+
+using namespace draconis::core::system;
+using namespace draconis::utils::types;
+
+struct SystemProperty {
+  String name;
+  String value;
+  String error;
+  bool hasError = false;
+};
+
+struct SystemInfo {
+  Vec<SystemProperty> properties;
+  String version = DRAC_VERSION;
+};
+
+// Glaze metadata for JSON serialization
+namespace glz {
+  template <>
+  struct meta<SystemProperty> {
+    using T = SystemProperty;
+    static constexpr auto value = object(
+      "name", &T::name,
+      "value", &T::value,
+      "error", &T::error,
+      "hasError", &T::hasError
+    );
+  };
+  
+  template <>
+  struct meta<SystemInfo> {
+    using T = SystemInfo;
+    static constexpr auto value = object(
+      "properties", &T::properties,
+      "version", &T::version
+    );
+  };
+}
+
+auto main() -> i32 {
+  glz::http_server server;
+  
+  server.get("/api/system", [](const glz::request& req, glz::response& res) {
+    SystemInfo sysInfo;
+    CacheManager cacheManager;
+    
+    // Add properties with error handling
+    auto addProperty = [&](const String& name, const Result<String>& result) {
+      if (result)
+        sysInfo.properties.emplace_back(SystemProperty{name, *result});
+      else
+        sysInfo.properties.emplace_back(
+          SystemProperty{name, "", result.error().message, true}
+        );
+    };
+    
+    addProperty("OS", GetOperatingSystem(cacheManager)
+      .transform([](const OSInfo& os) { 
+        return std::format("{} {}", os.name, os.version); 
+      }));
+    addProperty("Kernel", GetKernelVersion(cacheManager));
+    addProperty("CPU", GetCPUModel(cacheManager));
+    addProperty("GPU", GetGPUModel(cacheManager));
+    
+    // Serialize to JSON and return
+    String json;
+    if (auto err = glz::write_json(sysInfo, json); !err) {
+      res.header("Content-Type", "application/json")
+         .body(json);
+    } else {
+      res.status(500).body("Internal Server Error");
+    }
+  });
+  
+  server.bind(8080);
+  server.start();
+  
+  return 0;
+}
+```
+
+## Building an MCP server
+
+Create a Model Context Protocol server that exposes Draconis++ functionality to AI assistants:
+
+```cpp
+#include <glaze/glaze.hpp>
+#include <Drac++/Core/System.hpp>
+#include <iostream>
+
+using GlzObject = glz::generic::object_t;
+using GlzArray = glz::generic::array_t;
+using GlzJson = glz::generic;
+
+class DracStdioServer {
+ public:
+  DracStdioServer(String name, String version)
+    : m_name(std::move(name)), m_version(std::move(version)) {}
+  
+  auto registerTool(const String& name, 
+                    const String& description,
+                    auto handler) -> void {
+    m_tools[name] = {description, handler};
+  }
+  
+  auto run() -> Result<> {
+    String line;
+    
+    while (std::getline(std::cin, line)) {
+      if (line.empty()) continue;
+      
+      GlzObject requestJson;
+      if (auto errc = glz::read_json(requestJson, line); errc) {
+        std::cerr << "Parse error: " << glz::format_error(errc, line) << '\n';
+        continue;
+      }
+      
+      String method = requestJson["method"].get<String>();
+      GlzJson params = requestJson.contains("params") 
+        ? requestJson["params"] : GlzJson{};
+      
+      Result<GlzJson> result = processRequest(method, params);
+      
+      if (requestJson.contains("id")) {
+        GlzObject response;
+        response["jsonrpc"] = "2.0";
+        response["id"] = requestJson["id"];
+        
+        if (result)
+          response["result"] = *result;
+        else
+          response["error"] = GlzObject{
+            {"code", -32603},
+            {"message", result.error().message}
+          };
+        
+        String responseStr;
+        glz::write_json(response, responseStr);
+        std::cout << responseStr << '\n';
+        std::cout.flush();
+      }
+    }
+    
+    return {};
+  }
+  
+ private:
+  String m_name;
+  String m_version;
+  Map<String, Pair<String, Fn<GlzJson()>>> m_tools;
+  
+  auto processRequest(const String& method, const GlzJson& params) 
+    -> Result<GlzJson> {
+    if (method == "initialize") {
+      return GlzObject{
+        {"protocolVersion", "2025-06-18"},
+        {"capabilities", GlzObject{{"tools", true}}},
+        {"serverInfo", GlzObject{
+          {"name", m_name},
+          {"version", m_version}
+        }}
+      };
+    }
+    
+    if (method == "tools/list") {
+      GlzArray toolsArray;
+      for (const auto& [name, toolInfo] : m_tools) {
+        toolsArray.emplace_back(GlzObject{
+          {"name", name},
+          {"description", toolInfo.first}
+        });
+      }
+      return GlzObject{{"tools", toolsArray}};
+    }
+    
+    if (method == "tools/call") {
+      String toolName = params["name"].get<String>();
+      auto iter = m_tools.find(toolName);
+      if (iter == m_tools.end())
+        ERR_FMT(NotFound, "Tool not found: {}", toolName);
+      
+      return iter->second.second();
+    }
+    
+    ERR_FMT(NotSupported, "Unknown method: {}", method);
+  }
+};
+
+auto main() -> i32 {
+  DracStdioServer server("Draconis++ MCP", DRAC_VERSION);
+  
+  server.registerTool("system_info", 
+    "Get comprehensive system information",
+    []() -> GlzJson {
+      CacheManager cache;
+      GlzObject data;
+      
+      if (auto os = GetOperatingSystem(cache); os)
+        data["os"] = std::format("{} {}", os->name, os->version);
+      if (auto cpu = GetCPUModel(cache); cpu)
+        data["cpu"] = *cpu;
+      if (auto mem = GetMemInfo(cache); mem)
+        data["memory"] = std::format("{:.2f} / {:.2f} GiB",
+          BytesToGiB(mem->usedBytes), BytesToGiB(mem->totalBytes));
+      
+      return data;
+    });
+  
+  server.run();
+  return 0;
+}
+```
+
+## Advanced error handling patterns
+
+### Chaining operations with error propagation
+
+```cpp
+auto getSystemSummary(CacheManager& cache) -> Result<String> {
+  // Early return on error using .and_then()
+  return GetOperatingSystem(cache)
+    .and_then([&](const OSInfo& os) -> Result<String> {
+      return GetCPUModel(cache)
+        .transform([&](const String& cpu) {
+          return std::format("{} {} with {}", os.name, os.version, cpu);
+        });
+    });
+}
+```
+
+### Collecting multiple results with error accumulation
+
+```cpp
+struct SystemData {
+  Option<OSInfo> os;
+  Option<String> cpu;
+  Option<String> gpu;
+  Option<ResourceUsage> memory;
+  Vec<String> errors;
+};
+
+auto collectSystemData(CacheManager& cache) -> SystemData {
+  SystemData data;
+  
+  // Helper to try a query and accumulate errors
+  auto tryQuery = [&]<typename T>(Result<T> result, Option<T>& dest, 
+                                  const String& label) {
+    if (result)
+      dest = *result;
+    else
+      data.errors.push_back(std::format("{}: {}", label, 
+                                        result.error().message));
+  };
+  
+  tryQuery(GetOperatingSystem(cache), data.os, "OS");
+  tryQuery(GetCPUModel(cache), data.cpu, "CPU");
+  tryQuery(GetGPUModel(cache), data.gpu, "GPU");
+  tryQuery(GetMemInfo(cache), data.memory, "Memory");
+  
+  return data;
+}
+```
+
+### Custom error types
+
+```cpp
+enum class AppErrorCode {
+  SystemQueryFailed,
+  ConfigurationError,
+  NetworkError
+};
+
+struct AppError {
+  AppErrorCode code;
+  String message;
+  Option<DracError> cause;
+};
+
+auto queryWithAppError(CacheManager& cache) -> Result<String, AppError> {
+  Result<String> cpuResult = GetCPUModel(cache);
+  
+  if (!cpuResult) {
+    return Err(AppError{
+      .code = AppErrorCode::SystemQueryFailed,
+      .message = "Failed to query CPU information",
+      .cause = cpuResult.error()
+    });
+  }
+  
+  return *cpuResult;
+}
+```
+
+## Performance optimization
+
+### Pre-warming the cache
+
+```cpp
+auto prewarmCache(CacheManager& cache) -> void {
+  // Launch parallel queries to populate cache
+  auto futureOS = std::async(std::launch::async, 
+    [&]() { return GetOperatingSystem(cache); });
+  auto futureCPU = std::async(std::launch::async, 
+    [&]() { return GetCPUModel(cache); });
+  auto futureGPU = std::async(std::launch::async, 
+    [&]() { return GetGPUModel(cache); });
+  auto futureMem = std::async(std::launch::async, 
+    [&]() { return GetMemInfo(cache); });
+  
+  // Wait for all to complete
+  futureOS.wait();
+  futureCPU.wait();
+  futureGPU.wait();
+  futureMem.wait();
+}
+```
+
+### Selective cache invalidation
+
+```cpp
+// Only invalidate specific cache keys
+auto refreshCPUInfo(CacheManager& cache) -> void {
+  cache.invalidate("cpu_model");
+  cache.invalidate("cpu_cores");
+  // Next queries will fetch fresh data
+}
+```
+
+### Custom cache policies
+
+```cpp
+using namespace draconis::utils::cache;
+
+// Create a cache with custom TTL
+CacheManager cache;
+cache.setGlobalPolicy(
+  CachePolicy::tempDirectory()
+    .withTTL(std::chrono::minutes(5))
+);
+
+// Ignore cache for critical queries
+CacheManager::ignoreCache = true;
+Result<String> freshData = GetCPUModel(cache);
+CacheManager::ignoreCache = false;
+```
+
+## Working with complex data structures
+
+### Processing network interfaces
+
+```cpp
+auto findInterfaceByIP(const String& targetIP, CacheManager& cache) 
+  -> Option<NetworkInterface> {
+  Result<Vec<NetworkInterface>> interfaces = GetNetworkInterfaces(cache);
+  
+  if (!interfaces)
+    return None;
+  
+  for (const auto& iface : *interfaces) {
+    if (iface.ipAddress == targetIP)
+      return iface;
+  }
+  
+  return None;
+}
+
+auto getActiveInterfaces(CacheManager& cache) 
+  -> Vec<NetworkInterface> {
+  Result<Vec<NetworkInterface>> interfaces = GetNetworkInterfaces(cache);
+  
+  if (!interfaces)
+    return {};
+  
+  Vec<NetworkInterface> active;
+  std::ranges::copy_if(*interfaces, std::back_inserter(active),
+    [](const auto& iface) { 
+      return !iface.ipAddress.empty() && iface.ipAddress != "0.0.0.0";
+    });
+  
+  return active;
+}
+```
+
+### Aggregating display information
+
+```cpp
+struct DisplaySummary {
+  u32 totalDisplays;
+  u32 totalPixels;
+  u32 maxRefreshRate;
+};
+
+auto getDisplaySummary(CacheManager& cache) -> Result<DisplaySummary> {
+  Result<Vec<DisplayInfo>> displays = GetOutputs(cache);
+  
+  if (!displays)
+    return Err(displays.error());
+  
+  DisplaySummary summary{
+    .totalDisplays = static_cast<u32>(displays->size()),
+    .totalPixels = 0,
+    .maxRefreshRate = 0
+  };
+  
+  for (const auto& display : *displays) {
+    summary.totalPixels += display.width * display.height;
+    summary.maxRefreshRate = std::max(summary.maxRefreshRate, 
+                                      display.refreshRate);
+  }
+  
+  return summary;
+}
+```
+
+## Integration with logging
+
+```cpp
+#include <Drac++/Utils/Logging.hpp>
+
+using namespace draconis::utils::logging;
+
+auto main() -> i32 {
+  // Set log level
+  SetRuntimeLogLevel(LogLevel::Debug);
+  
+  CacheManager cache;
+  
+  debug_log("Querying system information...");
+  
+  Result<String> cpu = GetCPUModel(cache);
+  if (cpu) {
+    info_log("CPU detected: {}", *cpu);
+  } else {
+    error_log("CPU query failed: {}", cpu.error().message);
+  }
+  
+  return 0;
+}
+```
+
+## Thread safety considerations
+
+```cpp
+#include <thread>
+#include <mutex>
+
+class ThreadSafeSystemMonitor {
+ public:
+  auto updateAll() -> void {
+    std::lock_guard lock(m_mutex);
+    
+    m_cpuModel = GetCPUModel(m_cache);
+    m_memInfo = GetMemInfo(m_cache);
+    m_diskUsage = GetDiskUsage(m_cache);
+  }
+  
+  auto getCPU() const -> Option<String> {
+    std::lock_guard lock(m_mutex);
+    return m_cpuModel ? Option<String>(*m_cpuModel) : None;
+  }
+  
+ private:
+  mutable std::mutex m_mutex;
+  CacheManager m_cache;
+  Option<String> m_cpuModel;
+  Option<ResourceUsage> m_memInfo;
+  Option<ResourceUsage> m_diskUsage;
+};
+```
+
+## Next steps
+
+- Learn how to [develop plugins](/guides/plugin-development)
+- Explore [platform-specific implementations](/guides/platform-implementation)
+- Review the complete [API reference](/api/core/system)

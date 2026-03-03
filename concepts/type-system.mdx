@@ -1,0 +1,280 @@
+---
+title: Type system
+description: Custom type aliases and Rust-inspired ergonomics
+---
+
+Draconis++ uses custom type aliases defined in `include/Drac++/Utils/Types.hpp` to improve code readability and express intent more clearly.
+
+## Why custom types?
+
+1. **Consistency**: Uniform naming across the codebase
+2. **Expressiveness**: Types like `Option<T>` and `Result<T>` convey meaning
+3. **Safety**: Wrapper types prevent common errors
+4. **Rust-like ergonomics**: Familiar patterns for developers from other languages
+
+## Primitive types
+
+Rust-inspired integer and floating-point type aliases:
+
+```cpp
+using u8  = std::uint8_t;     // 8-bit unsigned
+using u16 = std::uint16_t;    // 16-bit unsigned
+using u32 = std::uint32_t;    // 32-bit unsigned
+using u64 = std::uint64_t;    // 64-bit unsigned
+
+using i8  = std::int8_t;      // 8-bit signed
+using i16 = std::int16_t;     // 16-bit signed
+using i32 = std::int32_t;     // 32-bit signed
+using i64 = std::int64_t;     // 64-bit signed
+
+using f32 = float;            // 32-bit floating-point
+using f64 = double;           // 64-bit floating-point
+
+using usize = std::size_t;    // Unsigned size type
+using isize = std::ptrdiff_t; // Signed size type
+```
+
+### Usage example
+
+```cpp
+using namespace draconis::utils::types;
+
+u32 count = 0;
+f64 average = 42.5;
+usize length = data.size();
+```
+
+## String types
+
+```cpp
+using String      = std::string;       // Owning string
+using WString     = std::wstring;      // Wide string (Windows)
+using StringView  = std::string_view;  // Non-owning view
+using WStringView = std::wstring_view; // Wide view
+
+using CStr  = char;           // Single character
+using PCStr = const char*;    // C-style string pointer
+using WCStr = wchar_t;        // Wide character
+using PWCStr = const wchar_t*; // Wide C-string pointer
+```
+
+<Note>
+  Use `StringView` for function parameters that only read strings to avoid unnecessary copies.
+</Note>
+
+## Container types
+
+```cpp
+template <typename Tp>
+using Vec = std::vector<Tp>;  // Dynamic array
+
+template <typename Tp, usize sz>
+using Array = std::array<Tp, sz>;  // Fixed-size array
+
+template <typename Tp, usize sz = std::dynamic_extent>
+using Span = std::span<Tp, sz>;  // Non-owning view
+
+template <typename Key, typename Val>
+using Map = std::map<Key, Val, std::less<>>;  // Ordered map
+
+template <typename Key, typename Val>
+using UnorderedMap = ankerl::unordered_dense::map<Key, Val>;  // Hash map
+
+template <typename T1, typename T2>
+using Pair = std::pair<T1, T2>;  // Pair of values
+
+template <typename... Ts>
+using Tuple = std::tuple<Ts...>;  // Tuple of values
+```
+
+### Usage example
+
+```cpp
+Vec<String> names = {"Alice", "Bob", "Charlie"};
+Array<i32, 4> scores = {85, 92, 78, 95};
+Map<String, u32> ages = {{"Alice", 30}, {"Bob", 25}};
+```
+
+<Tip>
+  `UnorderedMap` uses Robin Hood hashing from `ankerl::unordered_dense` for better performance than `std::unordered_map`.
+</Tip>
+
+## Smart pointers
+
+```cpp
+template <typename Tp>
+using UniquePointer = std::unique_ptr<Tp>;  // Unique ownership
+
+template <typename Tp>
+using SharedPointer = std::shared_ptr<Tp>;  // Shared ownership
+```
+
+### Usage example
+
+```cpp
+auto resource = UniquePointer<Resource>(new Resource());
+SharedPointer<Data> shared = std::make_shared<Data>();
+```
+
+## Option type
+
+`Option<T>` represents a value that may or may not be present:
+
+```cpp
+template <typename Tp>
+using Option = std::optional<Tp>;
+
+inline constexpr std::nullopt_t None = std::nullopt;
+
+template <typename Tp>
+constexpr auto Some(Tp&& value) -> Option<std::remove_reference_t<Tp>>;
+```
+
+### Usage example
+
+```cpp
+Option<String> findUser(u32 id) {
+  if (users.contains(id))
+    return Some(users[id]);
+  return None;
+}
+
+if (auto user = findUser(42)) {
+  std::println("Found: {}", *user);
+} else {
+  std::println("User not found");
+}
+```
+
+<Note>
+  Use `Option<T>` instead of nullable pointers or sentinel values to make optionality explicit.
+</Note>
+
+## Result type
+
+`Result<T, E>` represents a value that can either be a success value or an error:
+
+```cpp
+template <typename Tp = Unit, typename Er = error::DracError>
+using Result = std::expected<Tp, Er>;
+
+template <typename Er = error::DracError>
+using Err = std::unexpected<Er>;
+
+using Unit = void;  // Unit type for Result<void>
+```
+
+### Usage example
+
+```cpp
+auto readFile(StringView path) -> Result<String> {
+  std::ifstream file(path);
+  if (!file)
+    return Err(DracError(DracErrorCode::IoError, "Failed to open file"));
+  
+  String content((std::istreambuf_iterator<char>(file)), {});
+  return content;
+}
+
+if (auto content = readFile("config.toml")) {
+  std::println("Content: {}", *content);
+} else {
+  std::println("Error: {}", content.error().message);
+}
+```
+
+See [Error handling](/concepts/error-handling) for more details on using `Result` types.
+
+## Synchronization primitives
+
+```cpp
+using Mutex = std::mutex;                  // Mutex lock
+using LockGuard = std::lock_guard<Mutex>;  // RAII lock guard
+
+template <typename Tp>
+using Future = std::future<Tp>;  // Asynchronous result
+```
+
+### Usage example
+
+```cpp
+class ThreadSafeCounter {
+public:
+  auto increment() -> void {
+    LockGuard lock(m_mutex);
+    ++m_count;
+  }
+  
+private:
+  Mutex m_mutex;
+  u32 m_count = 0;
+};
+```
+
+## Function types
+
+```cpp
+template <typename Tp>
+using Fn = std::function<Tp>;  // Callable object
+```
+
+### Usage example
+
+```cpp
+auto processData(Vec<i32> data, Fn<bool(i32)> predicate) -> Vec<i32> {
+  Vec<i32> result;
+  for (i32 value : data) {
+    if (predicate(value))
+      result.push_back(value);
+  }
+  return result;
+}
+```
+
+## Miscellaneous types
+
+```cpp
+using RawPointer = void*;         // Type-erased pointer
+using Exception = std::exception; // Standard exception
+```
+
+## Usage guidelines
+
+<Steps>
+  <Step title="Import types in implementation files">
+    ```cpp
+    using namespace draconis::utils::types;
+    ```
+  </Step>
+  
+  <Step title="Use fully qualified names in headers">
+    ```cpp
+    // Avoid 'using namespace' in headers
+    auto GetCpuInfo() -> draconis::utils::types::Result<CpuInfo>;
+    ```
+  </Step>
+  
+  <Step title="Prefer Result<T> over exceptions">
+    ```cpp
+    // Good: Explicit error handling
+    auto parseConfig() -> Result<Config>;
+    
+    // Avoid: Hidden control flow
+    auto parseConfig() -> Config; // throws on error
+    ```
+  </Step>
+  
+  <Step title="Use Option<T> for optional values">
+    ```cpp
+    // Good: Explicit optionality
+    auto findItem(u32 id) -> Option<Item>;
+    
+    // Avoid: Ambiguous sentinel values
+    auto findItem(u32 id) -> Item*; // nullptr = not found?
+    ```
+  </Step>
+</Steps>
+
+## Full type reference
+
+All types are defined in the `draconis::utils::types` namespace in `/home/daytona/workspace/source/include/Drac++/Utils/Types.hpp:27`.

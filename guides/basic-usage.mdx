@@ -1,0 +1,343 @@
+---
+title: Basic usage
+description: Get started with Draconis++ library basics
+---
+
+This guide covers the fundamental concepts and patterns for using the Draconis++ library in your C++ projects.
+
+## Prerequisites
+
+Before you begin, ensure you have:
+
+- C++26-compatible compiler (Clang 17+, GCC 13+, or MSVC 19.36+)
+- Meson build system (1.1+)
+- Basic understanding of modern C++ features
+
+## Including the library
+
+Draconis++ uses a modular header structure. Include only what you need:
+
+```cpp
+#include <Drac++/Core/System.hpp>        // System information functions
+#include <Drac++/Services/Packages.hpp>  // Package manager integration
+#include <Drac++/Utils/Types.hpp>        // Type aliases
+#include <Drac++/Utils/Error.hpp>        // Error handling
+#include <Drac++/Utils/CacheManager.hpp> // Caching functionality
+```
+
+## Type system
+
+Draconis++ uses custom type aliases for better expressiveness and consistency:
+
+```cpp
+using namespace draconis::utils::types;
+
+// Primitive types
+u32 count = 42;              // std::uint32_t
+i64 offset = -100;           // std::int64_t
+f64 temperature = 72.5;      // double
+
+// Container types
+Vec<String> items;           // std::vector<std::string>
+Map<String, u64> counts;     // std::map<std::string, std::uint64_t>
+
+// Smart pointers
+UniquePointer<Object> ptr;   // std::unique_ptr<Object>
+SharedPointer<Data> shared;  // std::shared_ptr<Data>
+```
+
+See the [type reference](/api/utils/types) for a complete list.
+
+## Error handling with Result types
+
+Draconis++ uses `Result<T>` (equivalent to `std::expected`) for error handling instead of exceptions:
+
+```cpp
+using namespace draconis::core::system;
+using namespace draconis::utils::types;
+
+auto main() -> i32 {
+  CacheManager cache;
+  
+  // All system functions return Result<T>
+  Result<String> cpuResult = GetCPUModel(cache);
+  
+  // Check if the result contains a value
+  if (cpuResult) {
+    std::println("CPU: {}", *cpuResult);
+  } else {
+    std::println("Error: {}", cpuResult.error().message);
+  }
+  
+  return 0;
+}
+```
+
+### Pattern matching on results
+
+Use conditional checks for clean error handling:
+
+```cpp
+Result<OSInfo> osInfo = GetOperatingSystem(cache);
+
+if (osInfo) {
+  std::println("OS: {} {}", osInfo->name, osInfo->version);
+} else if (osInfo.error().code == DracErrorCode::NotSupported) {
+  std::println("OS detection not supported on this platform");
+} else {
+  std::println("Failed to detect OS: {}", osInfo.error().message);
+}
+```
+
+## Working with the cache manager
+
+The `CacheManager` optimizes repeated queries by caching results:
+
+```cpp
+#include <Drac++/Utils/CacheManager.hpp>
+
+using namespace draconis::utils::cache;
+using namespace draconis::core::system;
+
+auto main() -> i32 {
+  CacheManager cache;
+  
+  // Set cache policy (optional)
+  cache.setGlobalPolicy(CachePolicy::tempDirectory());
+  
+  // First call fetches data
+  Result<String> cpu1 = GetCPUModel(cache);
+  
+  // Second call uses cached value (much faster)
+  Result<String> cpu2 = GetCPUModel(cache);
+  
+  // Clear cache if needed
+  cache.invalidateAll(false);
+  
+  return 0;
+}
+```
+
+## Querying system information
+
+All system query functions follow the same pattern:
+
+```cpp
+#include <Drac++/Core/System.hpp>
+#include <Drac++/Utils/CacheManager.hpp>
+#include <print>
+
+using namespace draconis::core::system;
+using namespace draconis::utils::types;
+
+auto main() -> i32 {
+  CacheManager cache;
+  
+  // Operating system
+  if (Result<OSInfo> os = GetOperatingSystem(cache); os)
+    std::println("OS: {} {}", os->name, os->version);
+  
+  // Kernel version
+  if (Result<String> kernel = GetKernelVersion(cache); kernel)
+    std::println("Kernel: {}", *kernel);
+  
+  // CPU information
+  if (Result<String> cpu = GetCPUModel(cache); cpu)
+    std::println("CPU: {}", *cpu);
+  
+  if (Result<CPUCores> cores = GetCPUCores(cache); cores)
+    std::println("Cores: {} physical, {} logical", cores->physical, cores->logical);
+  
+  // GPU information
+  if (Result<String> gpu = GetGPUModel(cache); gpu)
+    std::println("GPU: {}", *gpu);
+  
+  // Memory usage
+  if (Result<ResourceUsage> mem = GetMemInfo(cache); mem) {
+    f64 usedGiB = BytesToGiB(mem->usedBytes);
+    f64 totalGiB = BytesToGiB(mem->totalBytes);
+    std::println("Memory: {:.2f} / {:.2f} GiB", usedGiB, totalGiB);
+  }
+  
+  // Disk usage
+  if (Result<ResourceUsage> disk = GetDiskUsage(cache); disk) {
+    f64 usedGiB = BytesToGiB(disk->usedBytes);
+    f64 totalGiB = BytesToGiB(disk->totalBytes);
+    std::println("Disk: {:.2f} / {:.2f} GiB", usedGiB, totalGiB);
+  }
+  
+  // Desktop environment
+  if (Result<String> de = GetDesktopEnvironment(cache); de)
+    std::println("Desktop: {}", *de);
+  
+  // Window manager
+  if (Result<String> wm = GetWindowManager(cache); wm)
+    std::println("WM: {}", *wm);
+  
+  // Shell
+  if (Result<String> shell = GetShell(cache); shell)
+    std::println("Shell: {}", *shell);
+  
+  // Host/hostname
+  if (Result<String> host = GetHost(cache); host)
+    std::println("Host: {}", *host);
+  
+  // System uptime
+  if (Result<std::chrono::seconds> uptime = GetUptime(); uptime) {
+    u32 hours = uptime->count() / 3600;
+    u32 minutes = (uptime->count() % 3600) / 60;
+    std::println("Uptime: {}h {}m", hours, minutes);
+  }
+  
+  return 0;
+}
+```
+
+## Querying package counts
+
+Get installed package counts from system package managers:
+
+```cpp
+#include <Drac++/Services/Packages.hpp>
+
+using namespace draconis::services::packages;
+using namespace draconis::utils::types;
+using enum Manager;
+
+auto main() -> i32 {
+  CacheManager cache;
+  
+  // Specify which package managers to query
+  Manager managers = Pacman | Cargo | Nix;
+  
+  Result<Map<String, u64>> counts = GetIndividualCounts(cache, managers);
+  
+  if (counts) {
+    for (const auto& [name, count] : *counts) {
+      std::println("{}: {} packages", name, count);
+    }
+  }
+  
+  return 0;
+}
+```
+
+## Working with network interfaces
+
+Query network interface information:
+
+```cpp
+using namespace draconis::core::system;
+
+auto main() -> i32 {
+  CacheManager cache;
+  
+  // Get all network interfaces
+  Result<Vec<NetworkInterface>> interfaces = GetNetworkInterfaces(cache);
+  
+  if (interfaces) {
+    for (const auto& iface : *interfaces) {
+      std::println("Interface: {}", iface.name);
+      std::println("  IP: {}", iface.ipAddress);
+      std::println("  MAC: {}", iface.macAddress);
+    }
+  }
+  
+  // Get primary interface only
+  Result<NetworkInterface> primary = GetPrimaryNetworkInterface(cache);
+  
+  if (primary)
+    std::println("Primary: {} ({})", primary->name, primary->ipAddress);
+  
+  return 0;
+}
+```
+
+## Querying display information
+
+Get information about connected displays:
+
+```cpp
+using namespace draconis::core::system;
+
+auto main() -> i32 {
+  CacheManager cache;
+  
+  // Get all displays
+  Result<Vec<DisplayInfo>> displays = GetOutputs(cache);
+  
+  if (displays) {
+    for (const auto& display : *displays) {
+      std::println("Display: {}", display.name);
+      std::println("  Resolution: {}x{}", display.width, display.height);
+      std::println("  Refresh: {} Hz", display.refreshRate);
+    }
+  }
+  
+  // Get primary display only
+  Result<DisplayInfo> primary = GetPrimaryOutput(cache);
+  
+  if (primary)
+    std::println("Primary: {}x{}@{}Hz", 
+                 primary->width, primary->height, primary->refreshRate);
+  
+  return 0;
+}
+```
+
+## Creating helper functions
+
+Build reusable abstractions over the library:
+
+```cpp
+#include <Drac++/Core/System.hpp>
+#include <matchit.hpp>
+
+using namespace draconis::core::system;
+using namespace draconis::utils::types;
+using matchit::impl::Overload;
+
+// Generic property handler
+auto printSystemProperty(const String& label, auto result) -> void {
+  auto handler = Overload {
+    [&](const Result<String>& r) {
+      if (r)
+        std::println("{}: {}", label, *r);
+      else
+        std::println("{}: Error - {}", label, r.error().message);
+    },
+    [&](const Result<OSInfo>& r) {
+      if (r)
+        std::println("{}: {} {}", label, r->name, r->version);
+      else
+        std::println("{}: Error - {}", label, r.error().message);
+    },
+    [&](const Result<ResourceUsage>& r) {
+      if (r)
+        std::println("{}: {:.2f} / {:.2f} GiB", 
+                     label, BytesToGiB(r->usedBytes), BytesToGiB(r->totalBytes));
+      else
+        std::println("{}: Error - {}", label, r.error().message);
+    },
+  };
+  
+  handler(result);
+}
+
+auto main() -> i32 {
+  CacheManager cache;
+  
+  printSystemProperty("OS", GetOperatingSystem(cache));
+  printSystemProperty("CPU", GetCPUModel(cache));
+  printSystemProperty("Memory", GetMemInfo(cache));
+  
+  return 0;
+}
+```
+
+## Next steps
+
+- Explore [advanced patterns](/guides/advanced-usage) for complex scenarios
+- Learn how to [develop plugins](/guides/plugin-development)
+- Review the [API reference](/api/core/system) for all available functions
+- Check [platform implementations](/guides/platform-implementation) for OS-specific details

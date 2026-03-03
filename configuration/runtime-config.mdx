@@ -1,0 +1,464 @@
+---
+title: Runtime configuration
+description: Configure Draconis++ at runtime using TOML files
+---
+
+When precompiled configuration is disabled (the default), Draconis++ reads configuration from a `config.toml` file at runtime. This provides maximum flexibility for customization without recompiling.
+
+<Note>
+  Runtime configuration is only available when built with `-Dprecompiled_config=false` (the default).
+</Note>
+
+## Configuration file location
+
+Draconis++ searches for `config.toml` in the following locations (in order):
+
+<Tabs>
+  <Tab title="Linux/BSD">
+    1. `$XDG_CONFIG_HOME/draconis++/config.toml`
+    2. `$HOME/.config/draconis++/config.toml`
+    3. `$HOME/.draconis++/config.toml`
+    4. `./config.toml` (current directory)
+  </Tab>
+
+  <Tab title="macOS">
+    1. `$XDG_CONFIG_HOME/draconis++/config.toml`
+    2. `$HOME/.config/draconis++/config.toml`
+    3. `$HOME/.draconis++/config.toml`
+    4. `./config.toml` (current directory)
+  </Tab>
+
+  <Tab title="Windows">
+    1. `%LOCALAPPDATA%\draconis++\config.toml`
+    2. `%USERPROFILE%\.config\draconis++\config.toml`
+    3. `%USERPROFILE%\AppData\Local\draconis++\config.toml`
+    4. `%APPDATA%\draconis++\config.toml`
+    5. `.\config.toml` (current directory)
+  </Tab>
+</Tabs>
+
+If no configuration file is found, Draconis++ automatically creates a default one at the first location.
+
+<Tip>
+  The recommended location is `~/.config/draconis++/config.toml` on Unix-like systems and `%LOCALAPPDATA%\draconis++\config.toml` on Windows.
+</Tip>
+
+## Configuration structure
+
+The TOML configuration file is divided into several sections:
+
+```toml config.toml
+[general]
+name = "User"
+language = "en"
+
+[logo]
+path = "/path/to/logo.png"
+protocol = "kitty"
+width = 200
+height = 0
+
+[packages]
+enabled = ["cargo", "pacman", "nix"]
+
+[plugins]
+enabled = true
+auto_load = ["weather"]
+
+[[ui.layout]]
+name = "system"
+
+  [[ui.layout.rows]]
+  key = "host"
+
+  [[ui.layout.rows]]
+  key = "os"
+  label = "Operating System"
+  icon = "  "
+```
+
+## General settings
+
+```toml
+[general]
+name = "User"      # Display name for greeting (default: system username)
+language = "en"    # UI language: en, es, fr, de (default: en)
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | system username | Display name shown in the greeting |
+| `language` | string | `"en"` | Language code for localization (en, es, fr, de) |
+
+<Note>
+  If `name` is not specified, Draconis++ uses the system username from `getpwuid()` on Unix or `GetUserNameA()` on Windows.
+</Note>
+
+## Logo configuration
+
+Configure inline image rendering for supported terminal protocols:
+
+```toml
+[logo]
+path = "/home/user/.config/draconis++/logo.png"  # Path to image file
+protocol = "kitty"                               # Protocol: kitty, kitty-direct, iterm2
+width = 200                                      # Width in pixels (0 = terminal default)
+height = 0                                       # Height in pixels (0 = auto from aspect ratio)
+```
+
+**Supported protocols:**
+- `kitty` - Kitty graphics protocol (default)
+- `kitty-direct` - Kitty direct rendering
+- `iterm2` - iTerm2 inline images
+
+<CodeGroup>
+```toml Kitty protocol
+[logo]
+path = "~/.config/draconis++/logo.png"
+protocol = "kitty"
+width = 200
+```
+
+```toml iTerm2 protocol
+[logo]
+path = "~/Pictures/logo.png"
+protocol = "iterm2"
+width = 250
+height = 250
+```
+
+```toml No logo (ASCII art)
+# Omit the [logo] section entirely
+# or leave path empty
+[logo]
+path = ""
+```
+</CodeGroup>
+
+## Package managers
+
+<Note>
+  Only available when built with `-Dpackagecount=enabled`.
+</Note>
+
+Specify which package managers to display:
+
+```toml
+[packages]
+enabled = ["cargo", "pacman", "nix"]
+```
+
+**Available package managers by platform:**
+
+<AccordionGroup>
+  <Accordion title="Linux" icon="linux">
+    - `apk` - Alpine Package Keeper
+    - `cargo` - Rust package manager
+    - `dpkg` - Debian packages
+    - `moss` - Serpent OS
+    - `nix` - Nix package manager
+    - `pacman` - Arch Linux
+    - `rpm` - Red Hat packages
+    - `xbps` - Void Linux
+  </Accordion>
+
+  <Accordion title="macOS" icon="apple">
+    - `cargo` - Rust package manager
+    - `homebrew` - Homebrew
+    - `macports` - MacPorts
+    - `nix` - Nix package manager
+  </Accordion>
+
+  <Accordion title="Windows" icon="windows">
+    - `cargo` - Rust package manager
+    - `chocolatey` - Chocolatey
+    - `scoop` - Scoop
+    - `winget` - Windows Package Manager
+  </Accordion>
+
+  <Accordion title="BSD" icon="server">
+    - `cargo` - Rust package manager (all BSD)
+    - `nix` - Nix package manager (all BSD)
+    - `pkgng` - FreeBSD, DragonFly BSD
+    - `pkgsrc` - NetBSD
+  </Accordion>
+
+  <Accordion title="Haiku" icon="hard-drive">
+    - `haikupkg` - Haiku package manager
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  Unknown package manager names are ignored with a warning logged to the console.
+</Warning>
+
+## Plugin configuration
+
+<Note>
+  Only available when built with `-Dplugins=enabled`.
+</Note>
+
+```toml
+[plugins]
+enabled = true                  # Enable/disable plugin system
+auto_load = ["weather"]         # Plugins to load automatically at startup
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `true` | Enable or disable the entire plugin system |
+| `auto_load` | array of strings | `[]` | List of plugin names to load at startup |
+
+**Plugin-specific configuration:**
+
+Plugins can have their own TOML sections. For example, the weather plugin:
+
+```toml
+[plugins]
+enabled = true
+auto_load = ["weather"]
+
+[weather]
+provider = "openmeteo"
+units = "metric"
+lat = 40.7128
+lon = -74.0060
+```
+
+<Tip>
+  Plugins are loaded from `$PREFIX/lib/draconis++/plugins/` by default. The plugin system uses dynamic loading (`.so`, `.dylib`, `.dll`).
+</Tip>
+
+## UI layout
+
+Customize the information displayed and its organization:
+
+```toml
+[[ui.layout]]
+name = "system"  # Group name (for organization only)
+
+  [[ui.layout.rows]]
+  key = "host"              # Required: data key
+  label = "Hostname"        # Optional: custom label
+  icon = "  "              # Optional: custom icon
+  color = "cyan"            # Optional: value color
+  auto_wrap = false         # Optional: enable word wrapping
+
+  [[ui.layout.rows]]
+  key = "os"
+
+[[ui.layout]]
+name = "hardware"
+
+  [[ui.layout.rows]]
+  key = "cpu"
+
+  [[ui.layout.rows]]
+  key = "ram"
+  color = "yellow"
+```
+
+### Built-in data keys
+
+| Key | Description |
+|-----|-------------|
+| `date` | Current date and time |
+| `host` | Hostname and model |
+| `os` | Operating system name |
+| `kernel` | Kernel version |
+| `cpu` | CPU model and information |
+| `gpu` | GPU model and driver |
+| `ram` | Memory usage |
+| `disk` | Disk usage |
+| `uptime` | System uptime |
+| `shell` | Current shell |
+| `packages` | Package counts (requires `packagecount` feature) |
+| `de` | Desktop environment |
+| `wm` | Window manager |
+| `playing` | Now playing (media) |
+
+**Plugin keys** use the format `plugin.<name>` (e.g., `plugin.weather`).
+
+### Row properties
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `key` | string | required | Data identifier (see Built-in data keys) |
+| `label` | string | auto | Custom label (overrides default) |
+| `icon` | string | auto | Custom icon (overrides default) |
+| `color` | string | `"white"` | Value foreground color |
+| `auto_wrap` | boolean | `false` | Enable automatic word wrapping |
+
+### Available colors
+
+<Tabs>
+  <Tab title="Basic colors">
+    `white`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`
+  </Tab>
+
+  <Tab title="Bright colors">
+    `brightred`, `brightgreen`, `brightyellow`, `brightblue`, `brightmagenta`, `brightcyan`, `brightwhite`
+  </Tab>
+</Tabs>
+
+<Note>
+  Color names are case-insensitive. Invalid color names fall back to white.
+</Note>
+
+## Complete example
+
+```toml config.toml
+# General configuration
+[general]
+name = "JohnDoe"
+language = "en"
+
+# Logo configuration (Kitty terminal)
+[logo]
+path = "~/.config/draconis++/archlinux-logo.png"
+protocol = "kitty"
+width = 220
+height = 0  # Auto-calculate from aspect ratio
+
+# Package managers to display
+[packages]
+enabled = ["pacman", "cargo", "nix"]
+
+# Plugin system
+[plugins]
+enabled = true
+auto_load = ["weather"]
+
+# UI Layout - Introduction
+[[ui.layout]]
+name = "intro"
+
+  [[ui.layout.rows]]
+  key = "date"
+
+  [[ui.layout.rows]]
+  key = "plugin.weather"
+  label = "Weather"
+  icon = " 󰖐 "
+  color = "cyan"
+  auto_wrap = true
+
+# UI Layout - System Information
+[[ui.layout]]
+name = "system"
+
+  [[ui.layout.rows]]
+  key = "host"
+  icon = "  "
+
+  [[ui.layout.rows]]
+  key = "os"
+  label = "Operating System"
+  color = "blue"
+
+  [[ui.layout.rows]]
+  key = "kernel"
+
+# UI Layout - Hardware
+[[ui.layout]]
+name = "hardware"
+
+  [[ui.layout.rows]]
+  key = "cpu"
+  label = "Processor"
+
+  [[ui.layout.rows]]
+  key = "gpu"
+  color = "green"
+
+  [[ui.layout.rows]]
+  key = "ram"
+  color = "yellow"
+
+  [[ui.layout.rows]]
+  key = "disk"
+  color = "yellow"
+
+  [[ui.layout.rows]]
+  key = "uptime"
+
+# UI Layout - Software
+[[ui.layout]]
+name = "software"
+
+  [[ui.layout.rows]]
+  key = "shell"
+
+  [[ui.layout.rows]]
+  key = "packages"
+
+# UI Layout - Session
+[[ui.layout]]
+name = "session"
+
+  [[ui.layout.rows]]
+  key = "de"
+  label = "Desktop"
+
+  [[ui.layout.rows]]
+  key = "wm"
+  label = "Window Manager"
+
+  [[ui.layout.rows]]
+  key = "playing"
+  label = "Now Playing"
+  color = "magenta"
+
+# Weather plugin configuration
+[weather]
+provider = "openmeteo"
+units = "metric"
+lat = 40.7128
+lon = -74.0060
+```
+
+## Error handling
+
+Draconis++ handles configuration errors gracefully:
+
+- **File not found:** Creates a default config file automatically
+- **Parse errors:** Logs the error with line number and falls back to defaults
+- **Unknown keys:** Ignored (allows plugin sections without breaking)
+- **Invalid values:** Logged with warnings, uses sensible defaults
+
+```
+[ERROR] Failed to parse config file: Expected end of table 'ui.layout.rows[0]', but got 'invalid_field'
+[INFO] Using in-memory defaults.
+```
+
+## Reloading configuration
+
+The CLI reads configuration once at startup. To apply changes:
+
+```bash
+# Edit your config
+vim ~/.config/draconis++/config.toml
+
+# Restart the CLI to apply changes
+draconis++
+```
+
+<Tip>
+  For faster iteration during customization, keep a terminal open and run `draconis++` after each config edit.
+</Tip>
+
+## Advantages vs precompiled config
+
+| Feature | Runtime TOML | Precompiled |
+|---------|--------------|-------------|
+| **Edit without rebuilding** | Yes | No (requires recompile) |
+| **Startup overhead** | TOML parsing | None |
+| **Configuration file** | `config.toml` | `config.hpp` |
+| **Validation** | Runtime | Compile-time |
+| **Plugin loading** | Dynamic (`.so`/`.dll`) | Static (embedded) |
+| **Binary size** | Smaller | Larger |
+| **Portability** | Requires config file | Single binary |
+
+<Tip>
+  Use runtime config for development and daily use. Use precompiled config for deployment and distribution.
+</Tip>

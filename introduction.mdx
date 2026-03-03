@@ -1,0 +1,115 @@
+---
+title: Introduction
+description: A modern C++26 system information library and CLI tool with a powerful plugin system
+---
+
+<Note>
+  Draconis++ requires C++26 and Meson ≥1.1. For the best experience, use Clang 21 or later.
+</Note>
+
+## What is Draconis++?
+
+Draconis++ is a cross-platform system information library written in modern C++26. It provides a clean, type-safe API for querying system details like OS version, hardware specs, memory usage, and more—with optional plugin support for extensibility.
+
+**Key features:**
+
+- **Cross-platform**: Windows, macOS, Linux, BSD, Haiku, and SerenityOS
+- **Modern C++26**: Leverages the latest language features for safety and performance
+- **Plugin system**: Extend functionality with static or dynamic plugins (e.g., weather integration)
+- **Multiple interfaces**: Use as a library, CLI tool, HTTP server, or MCP server
+- **Zero-cost abstractions**: Fast and efficient with minimal overhead
+- **Type-safe error handling**: Uses `Result<T>` types instead of exceptions
+
+## Architecture
+
+The library is organized into several modules:
+
+- **Core/System**: Platform-specific system information queries (OS, CPU, GPU, memory, disk, network, displays)
+- **Services/Packages**: Package manager integration for counting installed packages
+- **Utils**: Helper utilities (caching, logging, error types, argument parsing)
+- **Config**: Precompiled configuration support for static builds
+- **Plugins**: Extensible plugin system (weather, media players, etc.)
+
+## Use cases
+
+<CardGroup cols={2}>
+  <Card title="System information library" icon="book-open" href="/api/core/system">
+    Query system details programmatically in your C++ applications
+  </Card>
+  
+  <Card title="CLI tool" icon="terminal" href="/quickstart">
+    Display beautiful system information in your terminal
+  </Card>
+  
+  <Card title="HTTP API" icon="globe" href="/examples/basic-info">
+    Expose system data via a REST API using the Glaze HTTP example
+  </Card>
+  
+  <Card title="MCP server" icon="plug" href="/examples/plugin-example">
+    Integrate with Model Context Protocol clients for AI-powered system queries
+  </Card>
+</CardGroup>
+
+## Quick links
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Set up Draconis++ with Meson, vcpkg, or Nix
+  </Card>
+  
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Get up and running in minutes with a working example
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Customize build options, plugins, and precompiled settings
+  </Card>
+  
+  <Card title="Plugin development" icon="puzzle-piece" href="/guides/plugin-development">
+    Extend Draconis++ with custom plugins
+  </Card>
+</CardGroup>
+
+## Dependencies
+
+Draconis++ uses modern, high-performance libraries:
+
+- **magic_enum**: Compile-time enum reflection
+- **glaze**: Fast JSON serialization/deserialization
+- **mimalloc**: High-performance memory allocator (optional on macOS)
+- **SQLiteCpp**: Package count database support (Linux/macOS)
+- **asio**: Async I/O for HTTP/MCP server examples
+
+## Platform support
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| Linux | ✅ Full support | X11 (XCB) and Wayland support |
+| macOS | ✅ Full support | Requires macOS 14.0+ |
+| Windows | ✅ Full support | Windows 10+ with modern SDK |
+| FreeBSD | ✅ Full support | Including DragonFly BSD |
+| NetBSD | ✅ Full support | |
+| Haiku | ✅ Full support | |
+| SerenityOS | ✅ Full support | |
+
+## Version
+
+Current version: **0.1.0**
+
+Draconis++ is under active development. The API may change between releases.
+
+## Next steps
+
+<Steps>
+  <Step title="Install Draconis++">
+    Follow the [installation guide](/installation) to set up your build environment
+  </Step>
+  
+  <Step title="Run your first example">
+    Try the [quick start guide](/quickstart) to see Draconis++ in action
+  </Step>
+  
+  <Step title="Explore the API">
+    Check out the [API reference](/api/core/system) to learn what's possible
+  </Step>
+</Steps>

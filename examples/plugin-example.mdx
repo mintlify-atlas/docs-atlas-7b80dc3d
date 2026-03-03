@@ -1,0 +1,366 @@
+---
+title: Plugin creation
+description: Create custom plugins to extend Draconis++ functionality
+---
+
+Draconis++ supports two types of plugins: **Info Providers** (which supply additional system information) and **Output Formats** (which add new export formats). This guide shows how to create an info provider plugin.
+
+## Plugin types
+
+### Info provider plugins
+
+Provide structured information like weather, media playback, or Docker stats:
+
+- Display in the main UI
+- Export to JSON output
+- Use in compact format templates
+
+### Output format plugins
+
+Add new export formats like YAML, Markdown, or custom formats:
+
+- Format system data for output
+- Define file extensions
+- Support multiple format variants
+
+## Creating an info provider plugin
+
+Here's a complete example of a weather plugin that fetches and displays weather information.
+
+<Steps>
+  <Step title="Define your plugin class">
+    Create a class that inherits from `IInfoProviderPlugin`:
+
+    ```cpp
+    #include <Drac++/Core/Plugin.hpp>
+    #include <Drac++/Utils/Types.hpp>
+    #include <glaze/glaze.hpp>
+
+    using namespace draconis::core::plugin;
+    using namespace draconis::utils::types;
+
+    class WeatherPlugin : public IInfoProviderPlugin {
+     public:
+      WeatherPlugin() = default;
+
+      auto getMetadata() const -> const PluginMetadata& override {
+        static const PluginMetadata metadata {
+          .name = "Weather Plugin",
+          .version = "1.0.0",
+          .author = "Your Name",
+          .description = "Provides current weather information",
+          .type = PluginType::InfoProvider,
+          .dependencies = {
+            .requiresNetwork = true,
+            .requiresCaching = true
+          }
+        };
+        return metadata;
+      }
+
+     private:
+      struct WeatherData {
+        String city;
+        f32 temperature;
+        String condition;
+        u32 humidity;
+      };
+
+      Option<WeatherData> m_data;
+      Option<String> m_lastError;
+      bool m_enabled = true;
+    };
+    ```
+  </Step>
+
+  <Step title="Implement initialization">
+    Initialize your plugin with configuration and cache:
+
+    ```cpp
+    auto initialize(const PluginContext& ctx, ::PluginCache& cache)
+        -> Result<Unit> override {
+      // Load plugin configuration
+      std::filesystem::path configPath = ctx.configDir / "weather.json";
+
+      if (std::filesystem::exists(configPath)) {
+        std::ifstream file(configPath);
+        String content((std::istreambuf_iterator<char>(file)), {});
+
+        struct Config {
+          String apiKey;
+          String city;
+          bool enabled = true;
+        };
+
+        Config config;
+        if (auto err = glz::read_json(config, content); !err) {
+          m_apiKey = config.apiKey;
+          m_city = config.city;
+          m_enabled = config.enabled;
+        }
+      }
+
+      return Unit {};
+    }
+
+    auto shutdown() -> Unit override {
+      // Clean up resources
+      return Unit {};
+    }
+
+    auto isReady() const -> bool override {
+      return !m_apiKey.empty() && !m_city.empty();
+    }
+
+   private:
+    String m_apiKey;
+    String m_city;
+    ```
+  </Step>
+
+  <Step title="Implement data collection">
+    Fetch and cache your data:
+
+    ```cpp
+    auto collectData(::PluginCache& cache) -> Result<Unit> override {
+      if (!m_enabled || !isReady())
+        return Unit {};
+
+      // Check cache first (weather updates every 30 minutes)
+      if (auto cached = cache.get<WeatherData>("weather_data"); cached) {
+        m_data = *cached;
+        return Unit {};
+      }
+
+      // Fetch fresh data from API
+      try {
+        WeatherData data = fetchWeatherFromAPI(m_city, m_apiKey);
+        m_data = data;
+
+        // Cache for 30 minutes
+        cache.set("weather_data", data, 30 * 60);
+
+        m_lastError = None;
+        return Unit {};
+      } catch (const Exception& e) {
+        m_lastError = e.what();
+        return Err(DracError(DracErrorCode::NetworkError, e.what()));
+      }
+    }
+
+   private:
+    auto fetchWeatherFromAPI(const String& city, const String& apiKey)
+        -> WeatherData {
+      // Implement API call here
+      // For example, using libcurl or similar
+      WeatherData data;
+      data.city = city;
+      data.temperature = 72.0f;
+      data.condition = "Sunny";
+      data.humidity = 45;
+      return data;
+    }
+    ```
+  </Step>
+
+  <Step title="Implement output methods">
+    Define how your data is displayed and exported:
+
+    ```cpp
+    auto getProviderId() const -> String override {
+      return "weather";
+    }
+
+    auto toJson() const -> Result<String> override {
+      if (!m_data)
+        ERR(NotFound, "No weather data available");
+
+      String json;
+      if (auto err = glz::write_json(*m_data, json); err)
+        ERR(ParseError, "Failed to serialize weather data");
+
+      return json;
+    }
+
+    auto getFields() const -> Map<String, String> override {
+      Map<String, String> fields;
+
+      if (m_data) {
+        fields["weather_city"] = m_data->city;
+        fields["weather_temp"] = std::format("{:.1f}°F", m_data->temperature);
+        fields["weather_condition"] = m_data->condition;
+        fields["weather_humidity"] = std::format("{}%", m_data->humidity);
+      }
+
+      return fields;
+    }
+
+    auto getDisplayValue() const -> Result<String> override {
+      if (!m_data)
+        ERR(NotFound, "No weather data available");
+
+      return std::format("{:.1f}°F, {}",
+                         m_data->temperature,
+                         m_data->condition);
+    }
+
+    auto getDisplayIcon() const -> String override {
+      return "   ";  // Nerd Font weather icon
+    }
+
+    auto getDisplayLabel() const -> String override {
+      return "Weather";
+    }
+
+    auto getLastError() const -> Option<String> override {
+      return m_lastError;
+    }
+
+    auto isEnabled() const -> bool override {
+      return m_enabled;
+    }
+    ```
+  </Step>
+
+  <Step title="Register the plugin">
+    Use the `DRAC_PLUGIN` macro to register your plugin:
+
+    ```cpp
+    // Add glaze metadata for WeatherData
+    namespace glz {
+      template <>
+      struct meta<WeatherPlugin::WeatherData> {
+        using T = WeatherPlugin::WeatherData;
+        static constexpr auto value = object(
+          "city", &T::city,
+          "temperature", &T::temperature,
+          "condition", &T::condition,
+          "humidity", &T::humidity
+        );
+      };
+    }
+
+    // Register the plugin
+    DRAC_PLUGIN(WeatherPlugin)
+    ```
+  </Step>
+</Steps>
+
+## Plugin configuration
+
+Create a configuration file for your plugin at `~/.config/draconis++/plugins/weather.json`:
+
+```json
+{
+  "apiKey": "your-api-key-here",
+  "city": "San Francisco",
+  "enabled": true
+}
+```
+
+## Using the cache system
+
+The `PluginCache` class provides efficient caching with automatic expiry:
+
+```cpp
+// Set cached data with 30-minute TTL
+cache.set("weather_data", data, 30 * 60);
+
+// Get cached data (returns None if expired)
+if (auto cached = cache.get<WeatherData>("weather_data"); cached) {
+  // Use cached data
+}
+
+// Invalidate cache entry
+cache.invalidate("weather_data");
+```
+
+The cache uses BEVE (Binary Efficient Versatile Encoding) format for fast serialization.
+
+## Building your plugin
+
+### Static linking
+
+For static builds, compile with `-DDRAC_STATIC_PLUGIN_BUILD`:
+
+```bash
+g++ -c weather_plugin.cpp \
+  -DDRAC_STATIC_PLUGIN_BUILD \
+  -I/path/to/draconis/include \
+  -o weather_plugin.o
+```
+
+### Dynamic linking
+
+For dynamic plugins, compile as a shared library:
+
+```bash
+g++ -shared -fPIC weather_plugin.cpp \
+  -DDRAC_PLUGIN_BUILD \
+  -I/path/to/draconis/include \
+  -o libweather_plugin.so
+```
+
+Place the `.so` file in `~/.local/share/draconis++/plugins/`.
+
+## Testing your plugin
+
+Test your plugin with the `--list-plugins` and `--plugin-info` commands:
+
+```bash
+# List all loaded plugins
+draconis++ --list-plugins
+
+# Show plugin details
+draconis++ --plugin-info weather
+
+# View plugin data in JSON output
+draconis++ --json | jq '.weather'
+
+# Use in compact format
+draconis++ --compact '{weather_temp} in {weather_city}'
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Cache expensive operations">
+    Always cache network requests and slow operations. Use appropriate TTL values:
+    - Weather data: 30-60 minutes
+    - Media playback: 5-10 seconds
+    - System metrics: 1-5 seconds
+  </Accordion>
+
+  <Accordion title="Handle errors gracefully">
+    Return errors through the `Result` type and store them in `m_lastError` for doctor mode reporting.
+  </Accordion>
+
+  <Accordion title="Provide meaningful icons">
+    Use Nerd Fonts icons for consistent UI appearance. Include trailing space for alignment.
+  </Accordion>
+
+  <Accordion title="Prefix field names">
+    Prefix all field names with your provider ID to avoid conflicts:
+    - Good: `weather_temp`, `weather_city`
+    - Bad: `temp`, `city`
+  </Accordion>
+
+  <Accordion title="Document dependencies">
+    Clearly specify plugin dependencies in metadata so users know what's required.
+  </Accordion>
+</AccordionGroup>
+
+## Complete example
+
+The complete weather plugin example is available in the repository:
+
+```bash
+cd draconis++
+cat examples/plugins/weather_plugin.cpp
+```
+
+For more examples, see the MCP server example which demonstrates advanced plugin patterns:
+
+```bash
+cat examples/mcp_server/main.cpp
+```

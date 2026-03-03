@@ -1,0 +1,212 @@
+---
+title: Contributing overview
+description: Learn how to contribute to Draconis++ and get started with development
+---
+
+Thank you for your interest in contributing to Draconis++! This guide will help you get started with development and understand our contribution workflow.
+
+## Prerequisites
+
+Before you begin, ensure you have the following installed:
+
+- **C++26 compiler** - Clang 17+, GCC 13+, or MSVC 19.36+
+- **Meson** (1.1+) and **Ninja** - Build system
+- **just** (optional) - Command runner for simplified build commands
+
+## Getting started
+
+<Steps>
+  <Step title="Fork and clone the repository">
+    Fork the Draconis++ repository on GitHub and clone your fork locally:
+    
+    ```bash
+    git clone https://github.com/your-username/draconisplusplus.git
+    cd draconisplusplus
+    ```
+  </Step>
+
+  <Step title="Configure the build">
+    Set up the build directory using either `just` or `meson` directly:
+    
+    ```bash
+    # Using just (recommended)
+    just setup
+    
+    # Using Meson directly
+    meson setup build
+    ```
+  </Step>
+
+  <Step title="Build the project">
+    Compile the project:
+    
+    ```bash
+    # Using just
+    just build
+    
+    # Using Meson directly
+    meson compile -C build
+    ```
+  </Step>
+
+  <Step title="Run tests">
+    Verify everything works by running the test suite:
+    
+    ```bash
+    # Using just
+    just test
+    
+    # Using Meson directly
+    meson test -C build
+    ```
+  </Step>
+
+  <Step title="Make your changes">
+    Create a new branch for your feature or fix:
+    
+    ```bash
+    git checkout -b feature/my-new-feature
+    ```
+    
+    Make your changes following the [code style guidelines](/contributing/code-style).
+  </Step>
+
+  <Step title="Format your code">
+    Format your code using clang-format before committing:
+    
+    ```bash
+    just format
+    ```
+  </Step>
+
+  <Step title="Submit a pull request">
+    Push your changes and create a pull request on GitHub with a descriptive title and description.
+  </Step>
+</Steps>
+
+## Build configuration options
+
+You can customize the build by setting various options:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `weather` | feature | enabled | Weather data fetching |
+| `nowplaying` | feature | enabled | Now playing media info |
+| `packagecount` | feature | enabled | Package count functionality |
+| `caching` | feature | enabled | Caching system |
+| `plugins` | feature | enabled | Plugin support |
+| `precompiled_config` | bool | false | Use compile-time configuration |
+
+To configure options:
+
+```bash
+# Using just
+just configure -Dweather=disabled -Dplugins=enabled
+
+# Using Meson directly
+meson setup build --reconfigure -Dweather=disabled
+```
+
+## Common build commands
+
+```bash
+# Build with verbose output
+just build-verbose
+
+# Build in release mode
+just release
+
+# Run the binary
+just run
+
+# Run with arguments
+just run-args --help
+
+# Run tests with verbose output
+just test-verbose
+
+# Run a specific test
+just test-one test_name
+
+# Clean build artifacts
+just clean
+
+# Clean and rebuild
+just rebuild
+
+# Show build configuration
+just info
+```
+
+## Project architecture
+
+Draconis++ follows a layered architecture:
+
+### `include/Drac++/` - Public API
+
+Headers exposed to consumers of the library. These define the stable interface.
+
+- **Core/** - System data structures (`System.hpp`, `Package.hpp`)
+- **Services/** - Service interfaces for external data (weather, packages)
+- **Utils/** - Type aliases, error handling, macros
+
+### `src/Lib/` - Library implementation
+
+The core library containing all platform-agnostic and platform-specific code.
+
+- **Core/** - Cross-platform implementations
+- **OS/** - Platform-specific code (Windows, Linux, macOS, BSD, etc.)
+- **Services/** - External service integrations
+- **Wrappers/** - Thin wrappers around third-party libraries
+
+### `src/CLI/` - Command-line interface
+
+The user-facing application that consumes the library.
+
+- **Config/** - TOML configuration parsing and management
+- **Core/** - `SystemInfo` class that aggregates all system data
+- **UI/** - Terminal output formatting and theming
+
+## Submitting changes
+
+### Commit messages
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) format:
+
+```
+feat: add battery level monitoring
+fix: correct memory leak in cache manager
+docs: update contributing guide
+refactor: simplify OS detection logic
+perf: optimize string conversion on Windows
+```
+
+### Pull request guidelines
+
+- **Descriptive title** - Clearly summarize the change
+- **Reference issues** - Include `Fixes #123` if applicable
+- **Include tests** - Add tests for new functionality
+- **Update documentation** - Document new public APIs
+- **Keep changes focused** - One feature or fix per PR
+
+## Getting help
+
+If you have questions or need help:
+
+- Open an issue on GitHub
+- Start a discussion in the repository
+- Check existing issues and pull requests
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Code style" icon="paintbrush" href="/contributing/code-style">
+    Learn about naming conventions and formatting rules
+  </Card>
+  <Card title="Adding platforms" icon="computer" href="/contributing/adding-platforms">
+    Add support for new operating systems
+  </Card>
+  <Card title="Testing" icon="flask" href="/contributing/testing">
+    Write and run tests for your changes
+  </Card>
+</CardGroup>

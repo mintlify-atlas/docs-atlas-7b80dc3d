@@ -1,0 +1,377 @@
+---
+title: Windows platform
+description: Windows-specific implementation details and API usage
+---
+
+The Windows implementation (`src/Lib/OS/Windows.cpp`) provides native system information retrieval using Win32 APIs, Windows Registry, DirectX Graphics Infrastructure (DXGI), and the Windows Runtime.
+
+## Platform detection
+
+Windows builds are detected via the `_WIN32` preprocessor macro:
+
+```cpp
+#ifdef _WIN32
+// Windows-specific code
+#endif
+```
+
+## Required dependencies
+
+The Windows implementation requires the following libraries:
+
+| Library | Purpose | Required |
+|---------|---------|----------|
+| `dwmapi` | Desktop Window Manager API | Yes |
+| `windowsapp` | Windows Runtime (NPSM COM API) | Yes |
+| `setupapi` | Device setup and configuration | Yes |
+| `dxgi` | DirectX Graphics Infrastructure | Yes |
+| `iphlpapi` | IP Helper API for networking | Yes |
+| `ws2_32` | Winsock 2 API | Yes |
+
+## Preprocessor definitions
+
+The following macros are defined for Windows builds:
+
+```cpp
+#define NOMINMAX              // Prevent min/max macro conflicts
+#define WIN32_LEAN_AND_MEAN   // Exclude rarely-used headers
+#define _WIN32_WINNT 0x0602   // Target Windows 8+ APIs
+```
+
+## String handling
+
+Windows uses UTF-16 (wide strings) for most APIs. The implementation includes efficient conversion utilities:
+
+### Wide string conversion
+
+```cpp
+auto ConvertWStringToUTF8(const WString& wstr) -> Result<String>
+```
+
+**Features:**
+- Thread-local buffer reuse to minimize allocations
+- Automatic buffer growth for large strings
+- Efficient conversion using `WideCharToMultiByte`
+
+**Usage:**
+```cpp
+WString widePath = L"C:\\Windows\\System32";
+Result<String> utf8Path = ConvertWStringToUTF8(widePath);
+```
+
+## Registry access
+
+The implementation uses Windows Registry for OS version, hardware info, and CPU details:
+
+### Registry cache
+
+```cpp
+class RegistryCache {
+public:
+  static auto getInstance() -> const RegistryCache&;
+  auto getCurrentVersionKey() const -> HKEY;
+  auto getHardwareConfigKey() const -> HKEY;
+};
+```
+
+**Cached registry keys:**
+- `HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion`
+- `HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\CrashControl\\MachineCrash`
+
+### Reading registry values
+
+```cpp
+auto GetRegistryValue(const HKEY& hKey, const WString& valueName) -> Result<WString>
+```
+
+**Commonly accessed values:**
+- `ProductName`: Windows edition (e.g., "Windows 11 Pro")
+- `DisplayVersion`: Version number (e.g., "23H2")
+- `SystemFamily`: OEM system family
+- `SystemProductName`: OEM product name
+
+## OS version detection
+
+Windows version is retrieved from `KUSER_SHARED_DATA`, a kernel/user-mode shared memory region:
+
+```cpp
+class OsVersionCache {
+public:
+  struct VersionData {
+    u32 majorVersion;  // e.g., 10
+    u32 minorVersion;  // e.g., 0
+    u32 buildNumber;   // e.g., 22621
+  };
+  
+  auto getBuildNumber() const -> Result<u64>;
+};
+```
+
+**Memory offsets:**
+- Base address: `0x7FFE0000`
+- Major version: `+0x26C`
+- Minor version: `+0x270`
+- Build number: `+0x260`
+
+<Warning>
+This method uses Structured Exception Handling (SEH) to safely handle potential access violations.
+</Warning>
+
+### Windows 11 detection
+
+Windows 11 is detected by build number:
+
+```cpp
+if (buildNumber >= 22000) {
+  // Replace "Windows 10" with "Windows 11" in product name
+}
+```
+
+## CPU information
+
+CPU details are retrieved using two methods:
+
+### 1. CPUID instruction (x86/x86_64)
+
+```cpp
+Array<i32, 4> cpuInfo;
+Array<char, 49> brandString;
+
+__cpuidex(cpuInfo.data(), 0x80000002, 0);
+// Retrieve brand string from leaves 0x80000002, 0x80000003, 0x80000004
+```
+
+### 2. Registry fallback
+
+```cpp
+REGISTRY_KEY: HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0
+VALUE: ProcessorNameString
+```
+
+### Core count detection
+
+```cpp
+DWORD logicalProcessors = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+
+GetLogicalProcessorInformationEx(RelationProcessorCore, buffer, &bufferSize);
+// Parse buffer to count physical cores
+```
+
+## GPU enumeration
+
+GPU information is retrieved via DXGI:
+
+```cpp
+Microsoft::WRL::ComPtr<IDXGIFactory> factory;
+CreateDXGIFactory(IID_PPV_ARGS(&factory));
+
+Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+factory->EnumAdapters(0, &adapter);
+
+DXGI_ADAPTER_DESC desc;
+adapter->GetDesc(&desc);
+```
+
+**COM initialization:**
+- Uses thread-local COM initialization
+- `COINIT_MULTITHREADED` apartment model
+
+## Memory statistics
+
+```cpp
+MEMORYSTATUSEX memInfo;
+memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+GlobalMemoryStatusEx(&memInfo);
+
+u64 totalMem = memInfo.ullTotalPhys;
+u64 usedMem = memInfo.ullTotalPhys - memInfo.ullAvailPhys;
+```
+
+## Disk information
+
+### Enumerating drives
+
+```cpp
+Array<char, MAX_PATH> drives;
+GetLogicalDriveStringsA(MAX_PATH, drives.data());
+```
+
+### Drive details
+
+```cpp
+// Get drive type
+UINT driveType = GetDriveTypeA(driveRoot.c_str());
+// DRIVE_FIXED, DRIVE_REMOVABLE, DRIVE_CDROM, DRIVE_REMOTE, DRIVE_RAMDISK
+
+// Get filesystem
+Array<char, MAX_PATH> filesystem;
+GetVolumeInformationA(driveRoot.c_str(), nullptr, 0, nullptr, nullptr, nullptr, filesystem.data(), MAX_PATH);
+
+// Get disk space
+ULARGE_INTEGER freeBytes, totalBytes;
+GetDiskFreeSpaceExW(L"C:\\\\", nullptr, &totalBytes, &freeBytes);
+```
+
+## Process enumeration
+
+The implementation caches process snapshots for efficient shell detection:
+
+```cpp
+class ProcessTreeCache {
+public:
+  struct Data {
+    DWORD parentPid;
+    String baseExeNameLower;
+  };
+  
+  auto initialize() -> Result<>;
+  auto getProcessMap() const -> const UnorderedMap<DWORD, Data>&;
+};
+```
+
+**Implementation:**
+```cpp
+HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+PROCESSENTRY32W pe32;
+Process32FirstW(hSnap, &pe32);
+while (Process32NextW(hSnap, &pe32)) {
+  // Process each entry
+}
+```
+
+## Shell detection
+
+Shells are detected by traversing the process tree:
+
+### Windows shells
+
+```cpp
+constexpr Array<Pair<StringView, StringView>, 5> windowsShellMap = {{
+  { "cmd",        "Command Prompt" },
+  { "powershell", "PowerShell" },
+  { "pwsh",       "PowerShell Core" },
+  { "wt",         "Windows Terminal" },
+  { "explorer",   "Windows Explorer" },
+}};
+```
+
+### MSYS2 shells
+
+```cpp
+constexpr Array<Pair<StringView, StringView>, 7> msysShellMap = {{
+  { "bash", "Bash" },
+  { "zsh",  "Zsh" },
+  { "fish", "Fish" },
+  { "sh",   "sh" },
+  { "ksh",  "KornShell" },
+  { "tcsh", "tcsh" },
+  { "dash", "dash" },
+}};
+```
+
+**Detection logic:**
+1. Check for `MSYSTEM` environment variable (MSYS2)
+2. Parse `SHELL` environment variable if available
+3. Traverse process tree from current process
+4. Match against known shell names
+
+## Window manager detection
+
+```cpp
+constexpr Array<Pair<StringView, StringView>, 4> windowManagerMap = {{
+  { "glazewm",     "GlazeWM" },
+  { "komorebi",    "Komorebi" },
+  { "seelen-ui",   "Seelen UI" },
+  { "slu-service", "Seelen UI" },
+}};
+```
+
+**Fallback:** Returns `"DWM"` (Desktop Window Manager) if no tiling WM is detected.
+
+## Desktop environment detection
+
+Desktop environment is determined by build number:
+
+```cpp
+if (build >= 15063) return "Fluent";  // Windows 10 1703+
+if (build >= 9200)  return "Metro";   // Windows 8+
+if (build >= 6000)  return "Aero";    // Windows Vista+
+return "Classic";
+```
+
+## Display configuration
+
+Display information is retrieved using Display Configuration API:
+
+```cpp
+UINT32 pathCount, modeCount;
+GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount);
+
+Vec<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+Vec<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr);
+
+for (const auto& path : paths) {
+  const auto& mode = modes[path.targetInfo.modeInfoIdx];
+  u16 width = mode.targetMode.targetVideoSignalInfo.activeSize.cx;
+  u16 height = mode.targetMode.targetVideoSignalInfo.activeSize.cy;
+  f64 refreshRate = mode.targetMode.targetVideoSignalInfo.pixelRate / (totalSize.cx * totalSize.cy);
+}
+```
+
+## Network interfaces
+
+```cpp
+ULONG bufferSize = 15000;
+Vec<BYTE> buffer(bufferSize);
+auto* pAddresses = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+
+GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, nullptr, pAddresses, &bufferSize);
+
+for (auto* pCurr = pAddresses; pCurr != nullptr; pCurr = pCurr->Next) {
+  NetworkInterface iface;
+  iface.name = pCurr->AdapterName;
+  iface.isUp = (pCurr->OperStatus == IfOperStatusUp);
+  iface.isLoopback = (pCurr->IfType == IF_TYPE_SOFTWARE_LOOPBACK);
+  
+  // Format MAC address
+  if (pCurr->PhysicalAddressLength == 6) {
+    iface.macAddress = std::format("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", ...);
+  }
+}
+```
+
+## Uptime
+
+```cpp
+return std::chrono::seconds(GetTickCount64() / 1000);
+```
+
+## Performance optimizations
+
+1. **Registry caching**: Registry keys are opened once and reused
+2. **Thread-local buffers**: String conversion buffers are reused per thread
+3. **Process snapshot caching**: Process tree is cached with `std::call_once`
+4. **KUSER_SHARED_DATA**: Direct memory access for version info (no syscalls)
+5. **COM initialization**: Thread-local static initialization
+
+## Error handling
+
+All functions return `Result<T>` types:
+
+```cpp
+auto GetCPUModel(CacheManager& cache) -> Result<String> {
+  if (cpuInfo[0] == 0)
+    ERR_FMT(InternalError, "Failed to get CPU brand string. Error: {}", GetLastError());
+  
+  return cpuBrand;
+}
+```
+
+## Implementation location
+
+**File:** `src/Lib/OS/Windows.cpp` (1,265+ lines)
+
+**Namespace:** `draconis::core::system`
+
+**Build requirement:** Requires `_WIN32` macro to be defined

@@ -1,0 +1,409 @@
+---
+title: Testing guidelines
+description: Testing guidelines and how to run tests in Draconis++
+---
+
+Testing is an essential part of contributing to Draconis++. This guide covers how to run tests, write new tests, and ensure your changes don't break existing functionality.
+
+## Running tests
+
+### Basic test commands
+
+Run all tests using `just` or `meson`:
+
+```bash
+# Using just (recommended)
+just test
+
+# Using Meson directly
+meson test -C build
+```
+
+### Test commands reference
+
+| Command | Description |
+|---------|-------------|
+| `just test` | Run all tests |
+| `just test-verbose` | Run tests with verbose output |
+| `just test-one NAME` | Run a specific test by name |
+| `meson test -C build -v` | Run tests with verbose output (Meson) |
+| `meson test -C build --suite unit` | Run only unit tests |
+
+### Running specific tests
+
+To run a specific test:
+
+```bash
+# Using just
+just test-one test_memory_info
+
+# Using Meson directly
+meson test -C build test_memory_info
+```
+
+## Test output
+
+### Successful test output
+
+```
+Ok:     1 / 10  test_cpu_info
+Ok:     2 / 10  test_memory_info
+Ok:     3 / 10  test_os_detection
+...
+Ok:     10 / 10 test_cache_manager
+
+Ok:                 10
+Expected Fail:      0
+Fail:               0
+Unexpected Pass:    0
+Skipped:            0
+Timeout:            0
+```
+
+### Failed test output
+
+When tests fail, Meson provides details:
+
+```
+Fail:   1 / 10  test_memory_info
+
+--- stderr ---
+Assertion failed: expected 8192, got 4096
+  at test_memory_info.cpp:42
+```
+
+## Writing tests
+
+### Test structure
+
+Tests in Draconis++ follow this general structure:
+
+```cpp
+#include "Drac++/Core/System.hpp"
+#include "Drac++/Utils/Types.hpp"
+
+#include <cassert>
+#include <print>
+
+using namespace draconis::utils::types;
+using namespace draconis::core::system;
+
+auto main() -> int {
+  // Test memory info retrieval
+  auto memInfo = GetMemInfo();
+  
+  // Check that function succeeded
+  assert(memInfo.has_value());
+  
+  // Validate results
+  assert(memInfo->totalBytes > 0);
+  assert(memInfo->usedBytes <= memInfo->totalBytes);
+  
+  std::println("Memory test passed");
+  return 0;
+}
+```
+
+### Testing Result types
+
+When testing functions that return `Result<T>`:
+
+```cpp
+auto TestResultHandling() -> int {
+  // Test successful case
+  auto result = GetCpuInfo();
+  
+  if (!result) {
+    std::println("Error: {}", result.error().message());
+    return 1;
+  }
+  
+  // Access value safely
+  auto cpuInfo = result.value();
+  assert(!cpuInfo.modelName.empty());
+  
+  // Test error case
+  auto invalidResult = ReadFile("/nonexistent/path");
+  assert(!invalidResult.has_value());
+  
+  return 0;
+}
+```
+
+### Testing Option types
+
+When testing functions that return `Option<T>`:
+
+```cpp
+auto TestOptionHandling() -> int {
+  // Test Some case
+  auto value = Some(42);
+  assert(value.has_value());
+  assert(value.value() == 42);
+  
+  // Test None case
+  Option<i32> empty = None;
+  assert(!empty.has_value());
+  
+  // Use value_or for defaults
+  assert(empty.value_or(0) == 0);
+  
+  return 0;
+}
+```
+
+## Test best practices
+
+### 1. Test both success and failure paths
+
+```cpp
+auto TestFileOperations() -> int {
+  // Test successful read
+  auto content = ReadFile("valid_file.txt");
+  assert(content.has_value());
+  
+  // Test failed read
+  auto invalid = ReadFile("/invalid/path.txt");
+  assert(!invalid.has_value());
+  
+  return 0;
+}
+```
+
+### 2. Validate error messages
+
+```cpp
+auto TestErrorMessages() -> int {
+  auto result = ParseConfig("invalid_config");
+  
+  if (!result) {
+    auto errorMsg = result.error().message();
+    assert(errorMsg.contains("invalid"));
+  }
+  
+  return 0;
+}
+```
+
+### 3. Test edge cases
+
+```cpp
+auto TestEdgeCases() -> int {
+  // Empty input
+  auto emptyResult = ProcessData("");
+  assert(!emptyResult.has_value());
+  
+  // Maximum values
+  auto maxValue = CalculateSize(std::numeric_limits<u64>::max());
+  
+  // Null/None values
+  Option<String> nullValue = None;
+  assert(!nullValue.has_value());
+  
+  return 0;
+}
+```
+
+### 4. Clean up resources
+
+```cpp
+auto TestResourceCleanup() -> int {
+  {
+    auto resource = AcquireResource();
+    assert(resource.has_value());
+    
+    // Use resource...
+    
+    // Resource automatically released when out of scope
+  }
+  
+  // Verify cleanup
+  assert(!ResourceExists());
+  
+  return 0;
+}
+```
+
+## Platform-specific testing
+
+### Conditional tests
+
+Some features are platform-specific:
+
+```cpp
+auto TestPlatformFeatures() -> int {
+#ifdef _WIN32
+  // Windows-specific tests
+  auto registry = ReadRegistry("HKLM\\Software\\Test");
+  assert(registry.has_value());
+#elifdef __linux__
+  // Linux-specific tests
+  auto procInfo = ReadProcFile("cpuinfo");
+  assert(procInfo.has_value());
+#elifdef __APPLE__
+  // macOS-specific tests
+  auto plist = ReadPlist("/System/Library/test.plist");
+  assert(plist.has_value());
+#endif
+  
+  return 0;
+}
+```
+
+### Testing optional features
+
+Test features that depend on build configuration:
+
+```cpp
+auto TestOptionalFeatures() -> int {
+#ifdef DRAC_USE_CACHING
+  // Test caching if enabled
+  auto cache = GetCacheManager();
+  assert(cache != nullptr);
+#endif
+  
+#ifdef DRAC_USE_PLUGINS
+  // Test plugins if enabled
+  auto plugins = LoadPlugins();
+  assert(!plugins.empty());
+#endif
+  
+  return 0;
+}
+```
+
+## Integration tests
+
+Integration tests verify that components work together:
+
+```cpp
+auto TestSystemInfoIntegration() -> int {
+  // Create cache manager
+  CacheManager cache;
+  
+  // Get various system info (uses cache)
+  auto memInfo = GetMemInfo(cache);
+  auto cpuInfo = GetCpuInfo(cache);
+  auto osInfo = GetOperatingSystem(cache);
+  
+  // Verify all succeeded
+  assert(memInfo.has_value());
+  assert(cpuInfo.has_value());
+  assert(osInfo.has_value());
+  
+  // Verify cached data is consistent
+  auto cachedMemInfo = GetMemInfo(cache);
+  assert(cachedMemInfo->totalBytes == memInfo->totalBytes);
+  
+  return 0;
+}
+```
+
+## Continuous integration
+
+Tests are automatically run on:
+
+- Every pull request
+- Every commit to main branch
+- Multiple platforms (Windows, Linux, macOS)
+- Multiple compilers (GCC, Clang, MSVC)
+
+Ensure your tests pass locally before submitting a pull request:
+
+```bash
+# Full test workflow
+just clean
+just setup
+just build
+just test
+```
+
+## Debugging test failures
+
+### View detailed test output
+
+```bash
+# Run tests with verbose output
+just test-verbose
+
+# Or with Meson
+meson test -C build -v
+```
+
+### Run tests under debugger
+
+```bash
+# Build in debug mode
+just configure -Dbuildtype=debug
+just rebuild
+
+# Run specific test under gdb (Linux/macOS)
+gdb ./build/tests/test_name
+
+# Run under lldb (macOS)
+lldb ./build/tests/test_name
+```
+
+### Check test logs
+
+Meson saves test logs in `build/meson-logs/testlog.txt`:
+
+```bash
+# View test log
+cat build/meson-logs/testlog.txt
+
+# View last test failure
+tail -n 50 build/meson-logs/testlog.txt
+```
+
+## Test coverage
+
+When adding new features:
+
+1. **Add tests for all public APIs**
+2. **Test success and failure paths**
+3. **Test edge cases and boundary conditions**
+4. **Add platform-specific tests when needed**
+5. **Verify tests pass on all platforms**
+
+## Before submitting
+
+Before submitting a pull request:
+
+<Steps>
+  <Step title="Run all tests">
+    ```bash
+    just test
+    ```
+  </Step>
+  
+  <Step title="Run tests in release mode">
+    ```bash
+    just release
+    just test
+    ```
+  </Step>
+  
+  <Step title="Format code">
+    ```bash
+    just format
+    ```
+  </Step>
+  
+  <Step title="Run linter">
+    ```bash
+    just lint
+    ```
+  </Step>
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Contributing overview" icon="book" href="/contributing/overview">
+    Review the complete contribution workflow
+  </Card>
+  <Card title="Code style" icon="paintbrush" href="/contributing/code-style">
+    Learn about code style guidelines
+  </Card>
+</CardGroup>

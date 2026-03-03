@@ -1,80 +1,357 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick start
+description: Get started with Draconis++ in minutes
 ---
 
-## Get started in three steps
+<Note>
+  This guide assumes you've already [installed Draconis++](/installation). If not, complete the installation first.
+</Note>
 
-Get your documentation site running locally and make your first customization.
+## Your first program
 
-### Step 1: Set up your local environment
+Let's create a simple program that queries system information using the Draconis++ library.
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+<Steps>
+  <Step title="Create a new project directory">
+    ```bash
+    mkdir draconis-demo
+    cd draconis-demo
+    ```
+  </Step>
+  
+  <Step title="Create main.cpp">
+    Create a file called `main.cpp` with the following code:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    ```cpp main.cpp
+    #include <print>
+    #include <Drac++/Core/System.hpp>
+    #include <Drac++/Utils/CacheManager.hpp>
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    using namespace draconis::core::system;
+    using namespace draconis::utils::cache;
+    using namespace draconis::utils::types;
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    int main() {
+      // Create a cache manager for improved performance
+      CacheManager cache;
+      
+      // Get operating system information
+      Result<OSInfo> osInfo = GetOperatingSystem(cache);
+      if (osInfo) {
+        std::println("OS: {} {}", osInfo->name, osInfo->version);
+      } else {
+        std::println("Failed to get OS info: {}", osInfo.error().message);
+      }
+      
+      // Get kernel version
+      Result<String> kernel = GetKernelVersion(cache);
+      if (kernel) {
+        std::println("Kernel: {}", *kernel);
+      }
+      
+      // Get CPU information
+      Result<String> cpu = GetCPUModel(cache);
+      if (cpu) {
+        std::println("CPU: {}", *cpu);
+      }
+      
+      // Get memory usage
+      Result<ResourceUsage> memory = GetMemInfo(cache);
+      if (memory) {
+        double usedGB = BytesToGiB(memory->usedBytes);
+        double totalGB = BytesToGiB(memory->totalBytes);
+        std::println("Memory: {:.2f} GiB / {:.2f} GiB", usedGB, totalGB);
+      }
+      
+      // Get disk usage
+      Result<ResourceUsage> disk = GetDiskUsage(cache);
+      if (disk) {
+        double usedGB = BytesToGiB(disk->usedBytes);
+        double totalGB = BytesToGiB(disk->totalBytes);
+        std::println("Disk: {:.2f} GiB / {:.2f} GiB", usedGB, totalGB);
+      }
+      
+      return 0;
+    }
+    ```
+    
+    This program demonstrates:
+    - Creating a `CacheManager` to avoid redundant system queries
+    - Using `Result<T>` for type-safe error handling
+    - Querying OS, kernel, CPU, memory, and disk information
+    - Converting bytes to human-readable GiB format
+  </Step>
+  
+  <Step title="Create meson.build">
+    ```meson meson.build
+    project('draconis-demo', 'cpp',
+      version: '0.1.0',
+      default_options: ['cpp_std=c++26']
+    )
+    
+    # Find the Draconis++ dependency
+    draconis_dep = dependency('draconis++', required: true)
+    
+    # Build the executable
+    executable('demo',
+      'main.cpp',
+      dependencies: [draconis_dep]
+    )
+    ```
+  </Step>
+  
+  <Step title="Build and run">
+    ```bash
+    meson setup build
+    meson compile -C build
+    ./build/demo
+    ```
+    
+    Expected output:
+    ```
+    OS: Ubuntu 24.04.2 LTS
+    Kernel: 6.8.0-51-generic
+    CPU: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
+    Memory: 8.42 GiB / 15.52 GiB
+    Disk: 145.23 GiB / 512.00 GiB
+    ```
+  </Step>
+</Steps>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+## Understanding Result types
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+Draconis++ uses `Result<T>` for error handling instead of exceptions. This provides compile-time safety and explicit error handling.
 
-### Step 3: Go live
+<CodeGroup>
+```cpp Checking for success
+Result<String> cpu = GetCPUModel(cache);
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+if (cpu) {
+  // Success - dereference with *
+  std::println("CPU: {}", *cpu);
+} else {
+  // Error - access error details
+  std::println("Error: {}", cpu.error().message);
+  std::println("Code: {}", magic_enum::enum_name(cpu.error().code));
+}
+```
+
+```cpp Using has_value()
+Result<ResourceUsage> memory = GetMemInfo(cache);
+
+if (memory.has_value()) {
+  ResourceUsage& usage = memory.value();
+  std::println("Used: {} bytes", usage.usedBytes);
+  std::println("Total: {} bytes", usage.totalBytes);
+}
+```
+
+```cpp Pattern matching (C++26)
+Result<OSInfo> osInfo = GetOperatingSystem(cache);
+
+if (osInfo) {
+  auto& [name, version] = *osInfo;
+  std::println("{} {}", name, version);
+}
+```
+</CodeGroup>
+
+## Available system queries
+
+The `draconis::core::system` namespace provides these functions:
+
+| Function | Return Type | Description |
+|----------|-------------|-------------|
+| `GetOperatingSystem(cache)` | `Result<OSInfo>` | OS name and version |
+| `GetKernelVersion(cache)` | `Result<String>` | Kernel/NT version |
+| `GetHost(cache)` | `Result<String>` | Hostname/computer model |
+| `GetShell(cache)` | `Result<String>` | Current shell |
+| `GetDesktopEnvironment(cache)` | `Result<String>` | Desktop environment (KDE, GNOME, etc.) |
+| `GetWindowManager(cache)` | `Result<String>` | Window manager/compositor |
+| `GetCPUModel(cache)` | `Result<String>` | CPU model name |
+| `GetCPUCores(cache)` | `Result<CPUCores>` | Physical and logical core counts |
+| `GetGPUModel(cache)` | `Result<String>` | Primary GPU model |
+| `GetMemInfo(cache)` | `Result<ResourceUsage>` | Memory usage (used/total bytes) |
+| `GetDiskUsage(cache)` | `Result<ResourceUsage>` | Disk usage (used/total bytes) |
+| `GetNetworkInterfaces(cache)` | `Result<Vec<NetworkInterface>>` | All network interfaces |
+| `GetPrimaryNetworkInterface(cache)` | `Result<NetworkInterface>` | Primary network interface |
+| `GetOutputs(cache)` | `Result<Vec<DisplayInfo>>` | All displays |
+| `GetPrimaryOutput(cache)` | `Result<DisplayInfo>` | Primary display |
+| `GetUptime()` | `Result<std::chrono::seconds>` | System uptime |
+
+See the [API Reference](/api/core/system) for complete details.
+
+## Using the cache manager
+
+<Info>
+  The `CacheManager` caches system query results to improve performance when repeatedly accessing the same information.
+</Info>
+
+```cpp
+// Create once, reuse for multiple queries
+CacheManager cache;
+
+// First call queries the system
+Result<String> cpu1 = GetCPUModel(cache);
+
+// Second call returns cached result (no system query)
+Result<String> cpu2 = GetCPUModel(cache);
+
+// Invalidate cache for a specific key
+cache.invalidate("cpu_model");
+
+// Clear all cached data
+cache.invalidateAll();
+```
+
+## Running the example servers
+
+Draconis++ includes two example applications in the source tree:
+
+### HTTP server example
+
+Serves system information via HTTP using the Glaze HTTP library.
+
+```bash
+cd draconis++
+meson setup build -Dbuild_examples=true
+meson compile -C build
+./build/examples/glaze_http/glaze_http
+```
+
+Open http://localhost:3722 in your browser to see a formatted system info page.
+
+**Key features:**
+- Mustache templating with `glz::stencil`
+- JSON serialization via Glaze
+- Async HTTP server with ASIO
+- Custom CSS styling
+
+### MCP server example
+
+<Tip>
+  The MCP (Model Context Protocol) server exposes Draconis++ as stdio-based tools for AI assistants.
+</Tip>
+
+```bash
+./build/examples/mcp_server/mcp_server
+```
+
+Available MCP tools:
+- `system_info` - Get OS, kernel, shell, desktop environment
+- `hardware_info` - Get CPU, GPU, memory, disk info
+- `network_info` - Get network interface details
+- `display_info` - Get display/monitor information
+- `package_count` - Count installed packages by manager
+- `uptime` - Get system uptime
+- `comprehensive_info` - Get all info in one call
+- `cache_clear` - Clear the cache
+
+Integrate with MCP clients (Claude Desktop, etc.) by configuring the stdio transport.
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="API reference" icon="book" href="/api/core/system">
+    Explore all available functions and data types
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Learn how to configure build options and precompiled settings
+  </Card>
+  
+  <Card title="Plugin development" icon="puzzle-piece" href="/guides/plugin-development">
+    Extend Draconis++ with custom plugins
+  </Card>
+  
+  <Card title="Examples" icon="code" href="/examples/basic-info">
+    See complete example applications
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Common patterns
+
+### Handling multiple queries efficiently
+
+```cpp
+#include <Drac++/Core/System.hpp>
+#include <Drac++/Utils/CacheManager.hpp>
+
+using namespace draconis::core::system;
+using namespace draconis::utils::cache;
+
+void displaySystemInfo() {
+  CacheManager cache;
+  
+  // Query multiple items with one cache instance
+  auto os = GetOperatingSystem(cache);
+  auto kernel = GetKernelVersion(cache);
+  auto cpu = GetCPUModel(cache);
+  auto mem = GetMemInfo(cache);
+  
+  // Handle each result
+  if (os) std::println("OS: {} {}", os->name, os->version);
+  if (kernel) std::println("Kernel: {}", *kernel);
+  if (cpu) std::println("CPU: {}", *cpu);
+  if (mem) {
+    std::println("Memory: {:.2f} GiB / {:.2f} GiB",
+      BytesToGiB(mem->usedBytes),
+      BytesToGiB(mem->totalBytes)
+    );
+  }
+}
+```
+
+### Checking package counts (Linux/macOS)
+
+```cpp
+#include <Drac++/Services/Packages.hpp>
+
+using namespace draconis::services::packages;
+
+#if DRAC_ENABLE_PACKAGECOUNT
+void showPackages() {
+  CacheManager cache;
+  
+  // Query specific package managers
+  Manager enabled = Manager::Pacman | Manager::Cargo | Manager::Nix;
+  
+  Result<Map<String, u64>> counts = GetIndividualCounts(cache, enabled);
+  
+  if (counts) {
+    for (const auto& [manager, count] : *counts) {
+      std::println("{}: {} packages", manager, count);
+    }
+  }
+}
+#endif
+```
+
+### Network information
+
+```cpp
+void showNetworkInfo() {
+  CacheManager cache;
+  
+  // Get all interfaces
+  Result<Vec<NetworkInterface>> interfaces = GetNetworkInterfaces(cache);
+  
+  if (interfaces) {
+    for (const auto& iface : *interfaces) {
+      std::println("Interface: {}", iface.name);
+      std::println("  IP: {}", iface.ipAddress);
+      std::println("  MAC: {}", iface.macAddress);
+    }
+  }
+  
+  // Get primary interface only
+  Result<NetworkInterface> primary = GetPrimaryNetworkInterface(cache);
+  if (primary) {
+    std::println("Primary: {} ({})", primary->name, primary->ipAddress);
+  }
+}
+```
+
+<Card title="View full example code" icon="github" href="https://github.com/yourusername/draconis++/tree/main/examples">
+  Check out the complete HTTP and MCP server examples on GitHub
+</Card>

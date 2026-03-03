@@ -1,0 +1,274 @@
+---
+title: Build options
+description: Configure Draconis++ at build time using Meson options
+---
+
+Draconis++ provides extensive build-time configuration through Meson options. These options allow you to enable or disable features, customize platform support, and control what gets built.
+
+## Core features
+
+Control the main functionality of Draconis++:
+
+<AccordionGroup>
+  <Accordion title="packagecount" icon="box">
+    Enable package count functionality to display installed packages from various package managers.
+
+    - **Type:** feature
+    - **Default:** enabled
+    - **Meson flag:** `-Dpackagecount=enabled|disabled|auto`
+
+    When enabled on Linux/macOS, requires SQLiteCpp dependency for database operations.
+  </Accordion>
+
+  <Accordion title="caching" icon="database">
+    Enable caching functionality to improve performance by storing frequently accessed data.
+
+    - **Type:** feature
+    - **Default:** enabled
+    - **Meson flag:** `-Dcaching=enabled|disabled|auto`
+  </Accordion>
+
+  <Accordion title="plugins" icon="plug">
+    Enable the plugin system for extending Draconis++ with custom functionality.
+
+    - **Type:** feature
+    - **Default:** enabled
+    - **Meson flag:** `-Dplugins=enabled|disabled|auto`
+
+    When enabled on non-Windows systems, requires `libdl` for dynamic loading.
+  </Accordion>
+
+  <Accordion title="precompiled_config" icon="code">
+    Use precompiled configuration instead of runtime TOML parsing.
+
+    - **Type:** boolean
+    - **Default:** false
+    - **Meson flag:** `-Dprecompiled_config=true|false`
+
+    When enabled, you must provide a `config.hpp` file at the project root. See [Precompiled configuration](/configuration/precompiled-config) for details.
+  </Accordion>
+
+  <Accordion title="default_language" icon="language">
+    Set the default language for localization.
+
+    - **Type:** string
+    - **Default:** "en"
+    - **Meson flag:** `-Ddefault_language=en`
+    - **Valid values:** en, es, fr, de
+
+    This is compiled into the `DRAC_DEFAULT_LANGUAGE` preprocessor definition.
+  </Accordion>
+</AccordionGroup>
+
+## Build configuration
+
+Control what components get built:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `build_cli` | boolean | true | Build the CLI application |
+| `build_examples` | boolean | true | Build example applications |
+| `build_tests` | boolean | true | Build unit tests |
+
+```bash
+# Build only the library, skip CLI and examples
+meson setup build -Dbuild_cli=false -Dbuild_examples=false
+```
+
+## Plugin system
+
+<AccordionGroup>
+  <Accordion title="static_plugins" icon="link">
+    Compile plugins directly into the binary for maximum portability.
+
+    - **Type:** array
+    - **Default:** [] (empty)
+    - **Meson flag:** `-Dstatic_plugins=['plugin1','plugin2']`
+
+    When used with `precompiled_config=true`, creates a fully portable binary with no external dependencies.
+
+    ```bash
+    # Statically compile weather and custom plugins
+    meson setup build -Dprecompiled_config=true -Dstatic_plugins=['weather','custom']
+    ```
+
+    <Note>
+      When `precompiled_config=true`, plugins are only enabled if `static_plugins` is non-empty.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## Platform-specific options
+
+### Linux/BSD display server support
+
+<Tabs>
+  <Tab title="XCB (X11)">
+    Enable X11 window manager and display support using libxcb.
+
+    - **Type:** feature
+    - **Default:** enabled
+    - **Meson flag:** `-Dxcb=enabled|disabled|auto`
+    - **Platform:** Linux, BSD (not Windows/macOS/Serenity/Haiku)
+
+    Requires dependencies: `xau`, `xcb`, `xcb-randr`, `xdmcp`
+  </Tab>
+
+  <Tab title="Wayland">
+    Enable Wayland compositor and display support.
+
+    - **Type:** feature
+    - **Default:** enabled
+    - **Meson flag:** `-Dwayland=enabled|disabled|auto`
+    - **Platform:** Linux, BSD (not Windows/macOS/Serenity/Haiku)
+
+    Requires dependency: `wayland-client`
+  </Tab>
+</Tabs>
+
+### Linux package manager support
+
+<Accordion title="pugixml" icon="file-code">
+  Use pugixml for parsing XBPS package metadata on Void Linux.
+
+  - **Type:** feature
+  - **Default:** auto
+  - **Meson flag:** `-Dpugixml=enabled|disabled|auto`
+  - **Platform:** Linux, BSD (not Windows/macOS/Serenity/Haiku)
+</Accordion>
+
+### Development and Nix options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `build_for_musl` | boolean | false | Build for musl libc (primarily for Nix) |
+| `use_linked_pci_ids` | boolean | false | Use linked PCI IDs database (primarily for Nix) |
+
+## Preprocessor definitions
+
+Meson options are converted to C++ preprocessor definitions:
+
+```cpp
+// Version and build info
+DRAC_VERSION          // Project version (e.g., "0.1.0")
+DRAC_BUILD_DATE       // Build date (YYYY-MM-DD)
+DRAC_GIT_HASH         // Git commit hash (short form)
+DRAC_DEFAULT_LANGUAGE // Default language (e.g., "en")
+
+// Architecture detection
+DRAC_ARCH_64BIT       // 1 if 64-bit, 0 if 32-bit
+DRAC_ARCH_AARCH64     // 1 if ARM64
+DRAC_ARCH_ARM         // 1 if ARM (32-bit)
+DRAC_ARCH_X86         // 1 if x86 (32-bit)
+DRAC_ARCH_X86_64      // 1 if x86-64
+
+// Build type
+DRAC_DEBUG            // 1 if debug build, 0 otherwise
+
+// Feature flags
+DRAC_ENABLE_CACHING       // caching option
+DRAC_ENABLE_PACKAGECOUNT  // packagecount option
+DRAC_ENABLE_PLUGINS       // plugins option
+DRAC_PRECOMPILED_CONFIG   // precompiled_config option
+DRAC_USE_PUGIXML          // pugixml option
+DRAC_USE_LINKED_PCI_IDS   // use_linked_pci_ids option
+DRAC_USE_WAYLAND          // wayland option
+DRAC_USE_XCB              // xcb option
+```
+
+## Common configurations
+
+<CodeGroup>
+```bash Development build
+# Full-featured debug build with all options
+meson setup build \
+  -Dbuildtype=debug \
+  -Dpackagecount=enabled \
+  -Dcaching=enabled \
+  -Dplugins=enabled \
+  -Dbuild_tests=true
+```
+
+```bash Production build
+# Optimized release build
+meson setup build \
+  -Dbuildtype=release \
+  -Dpackagecount=enabled \
+  -Dcaching=enabled \
+  -Dplugins=enabled \
+  -Dbuild_tests=false \
+  -Dbuild_examples=false
+```
+
+```bash Portable binary
+# Static plugins with precompiled config
+meson setup build \
+  -Dbuildtype=release \
+  -Dprecompiled_config=true \
+  -Dstatic_plugins=['weather'] \
+  -Dbuild_cli=true \
+  -Dbuild_examples=false \
+  -Dbuild_tests=false
+```
+
+```bash Minimal build
+# Library only, no optional features
+meson setup build \
+  -Dpackagecount=disabled \
+  -Dcaching=disabled \
+  -Dplugins=disabled \
+  -Dbuild_cli=false \
+  -Dbuild_examples=false \
+  -Dbuild_tests=false
+```
+</CodeGroup>
+
+## Viewing build configuration
+
+After running `meson setup`, Meson displays a configuration summary:
+
+```
+Definitions
+  64-bit                  : YES
+  X86_64                  : YES
+  Debug                   : NO
+
+Features
+  Package counting        : YES
+  Caching                 : YES
+  Plugin system           : YES
+  Precompiled config      : NO
+  Default language        : en
+
+Platform Support (Linux only)
+  XCB (X11)              : YES
+  Wayland                : YES
+  pugixml                : YES
+  Use Linked pci.ids     : NO
+
+Build Options
+  Build examples         : YES
+  Build tests            : YES
+
+System
+  C++ Compiler           : clang
+  Host system            : linux
+  Build type             : debugoptimized
+  Install prefix         : /usr/local
+```
+
+## Reconfiguring builds
+
+Change options without starting from scratch:
+
+```bash
+# Reconfigure existing build directory
+meson configure build -Dpackagecount=disabled -Dplugins=enabled
+
+# View all current options
+meson configure build
+```
+
+<Tip>
+  Use `meson configure build` without arguments to see all available options and their current values.
+</Tip>

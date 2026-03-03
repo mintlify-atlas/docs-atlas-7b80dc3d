@@ -1,0 +1,143 @@
+---
+title: Basic system info
+description: Get basic system information using Draconis++
+---
+
+This example demonstrates how to retrieve basic system information using the Draconis++ library. The code shows how to get OS details, hardware specs, and resource usage.
+
+## Complete example
+
+This example creates a simple HTTP server that displays system information. It's based on the `glaze_http` example from the repository.
+
+```cpp
+#include <Drac++/Core/System.hpp>
+#include <Drac++/Utils/CacheManager.hpp>
+#include <Drac++/Utils/Error.hpp>
+#include <Drac++/Utils/Types.hpp>
+
+using namespace draconis::utils::types;
+using namespace draconis::core::system;
+using draconis::utils::cache::CacheManager;
+
+auto main() -> i32 {
+  CacheManager cacheManager;
+
+  // Get operating system info
+  if (Result<OSInfo> osResult = GetOperatingSystem(cacheManager); osResult) {
+    const OSInfo& os = *osResult;
+    std::cout << "OS: " << os.name << " " << os.version << "\n";
+  }
+
+  // Get kernel version
+  if (Result<String> kernelResult = GetKernelVersion(cacheManager); kernelResult) {
+    std::cout << "Kernel: " << *kernelResult << "\n";
+  }
+
+  // Get host information
+  if (Result<String> hostResult = GetHost(cacheManager); hostResult) {
+    std::cout << "Host: " << *hostResult << "\n";
+  }
+
+  // Get shell
+  if (Result<String> shellResult = GetShell(cacheManager); shellResult) {
+    std::cout << "Shell: " << *shellResult << "\n";
+  }
+
+  // Get CPU model
+  if (Result<String> cpuResult = GetCPUModel(cacheManager); cpuResult) {
+    std::cout << "CPU: " << *cpuResult << "\n";
+  }
+
+  // Get GPU model
+  if (Result<String> gpuResult = GetGPUModel(cacheManager); gpuResult) {
+    std::cout << "GPU: " << *gpuResult << "\n";
+  }
+
+  // Get memory info
+  if (Result<ResourceUsage> memResult = GetMemInfo(cacheManager); memResult) {
+    std::cout << "Memory: "
+              << BytesToGiB(memResult->usedBytes) << " / "
+              << BytesToGiB(memResult->totalBytes) << " GiB\n";
+  }
+
+  // Get disk usage
+  if (Result<ResourceUsage> diskResult = GetDiskUsage(cacheManager); diskResult) {
+    std::cout << "Disk: "
+              << BytesToGiB(diskResult->usedBytes) << " / "
+              << BytesToGiB(diskResult->totalBytes) << " GiB\n";
+  }
+
+  return EXIT_SUCCESS;
+}
+```
+
+## Key concepts
+
+### Cache manager
+
+The `CacheManager` is used to cache system information for better performance. Many system queries are expensive, so caching helps avoid redundant calls:
+
+```cpp
+CacheManager cacheManager;
+```
+
+### Result type
+
+All system information functions return a `Result<T>` type, which is similar to Rust's `Result`. This allows for safe error handling:
+
+```cpp
+if (Result<String> result = GetKernelVersion(cacheManager); result) {
+  // Success - use *result
+  std::cout << *result << "\n";
+} else {
+  // Error - check result.error()
+  std::cerr << "Error: " << result.error().message << "\n";
+}
+```
+
+### Resource usage
+
+The `ResourceUsage` struct contains information about used and total bytes for memory and disk:
+
+```cpp
+struct ResourceUsage {
+  u64 usedBytes;
+  u64 totalBytes;
+};
+```
+
+Use the `BytesToGiB()` helper function to convert bytes to gibibytes for display.
+
+## Error handling
+
+Handle errors gracefully by checking if the result contains a value:
+
+```cpp
+using draconis::utils::error::DracError;
+using enum draconis::utils::error::DracErrorCode;
+
+Result<String> result = GetKernelVersion(cacheManager);
+
+if (result) {
+  // Success path
+  std::cout << "Kernel: " << *result << "\n";
+} else if (result.error().code != NotSupported) {
+  // Only log errors that aren't "not supported"
+  std::cerr << "Error: " << result.error().message << "\n";
+}
+```
+
+## Building the example
+
+To build this example:
+
+```bash
+meson setup build
+meson compile -C build examples/basic-info
+```
+
+Run it:
+
+```bash
+./build/examples/basic-info
+```

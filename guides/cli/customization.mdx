@@ -1,0 +1,725 @@
+---
+title: "Customization"
+description: "Configure Draconis++ with TOML files, custom logos, and layouts"
+---
+
+Draconis++ offers two powerful configuration approaches: runtime configuration with TOML files and precompiled configuration with C++ headers. This guide covers both methods.
+
+## Configuration methods
+
+Draconis++ supports two configuration approaches:
+
+<CardGroup cols={2}>
+  <Card title="TOML configuration" icon="file-code">
+    Runtime configuration using TOML files. Flexible and easy to modify without recompiling.
+  </Card>
+  
+  <Card title="Precompiled configuration" icon="gear">
+    Compile-time configuration using C++ headers. Creates a fully portable binary with no external dependencies.
+  </Card>
+</CardGroup>
+
+<Note>
+  TOML configuration is the default. Precompiled configuration requires enabling `DRAC_PRECOMPILED_CONFIG` during build.
+</Note>
+
+## TOML configuration
+
+### Configuration file location
+
+Draconis++ looks for configuration files in platform-specific locations:
+
+<Tabs>
+  <Tab title="Linux">
+    ```bash
+    ~/.config/draconis++/config.toml
+    ```
+  </Tab>
+  
+  <Tab title="macOS">
+    ```bash
+    ~/Library/Application Support/draconis++/config.toml
+    ```
+  </Tab>
+  
+  <Tab title="Windows">
+    ```bash
+    %APPDATA%\draconis++\config.toml
+    ```
+  </Tab>
+</Tabs>
+
+To find your active configuration path:
+
+```bash
+draconis++ --show-config-path
+```
+
+### Basic TOML structure
+
+A typical TOML configuration file includes these sections:
+
+```toml
+[general]
+name = "User"
+language = "en"
+
+[logo]
+image_path = "/path/to/logo.png"
+protocol = "kitty"
+width = 200
+height = 0  # Auto-calculate from aspect ratio
+
+[[ui.layout]]
+name = "intro"
+[[ui.layout.rows]]
+key = "date"
+
+[[ui.layout]]
+name = "system"
+[[ui.layout.rows]]
+key = "host"
+[[ui.layout.rows]]
+key = "os"
+[[ui.layout.rows]]
+key = "kernel"
+```
+
+### General settings
+
+<ParamField path="general.name" type="string" default="auto-detected">
+  Display name shown in the greeting. If not specified, automatically detects from the system username.
+  
+  ```toml
+  [general]
+  name = "Alice"
+  ```
+</ParamField>
+
+<ParamField path="general.language" type="string" default="system language">
+  Language code for localization. Supported values: `en`, `es`, `fr`, `de`.
+  
+  ```toml
+  [general]
+  language = "es"
+  ```
+</ParamField>
+
+### Logo configuration
+
+Customize the logo display with inline images or ASCII art.
+
+<ParamField path="logo.image_path" type="string" optional>
+  Path to an image file to display. Leave empty to use ASCII art.
+  
+  ```toml
+  [logo]
+  image_path = "/home/user/Pictures/logo.png"
+  ```
+</ParamField>
+
+<ParamField path="logo.protocol" type="string" default="kitty">
+  Image rendering protocol. Valid values:
+  - `kitty` - Kitty terminal graphics protocol
+  - `kitty-direct` - Kitty direct rendering
+  - `iterm2` - iTerm2 inline images
+  
+  ```toml
+  [logo]
+  protocol = "kitty"
+  ```
+</ParamField>
+
+<ParamField path="logo.width" type="integer" optional>
+  Logo width in pixels.
+  
+  ```toml
+  [logo]
+  width = 200
+  ```
+</ParamField>
+
+<ParamField path="logo.height" type="integer" optional>
+  Logo height in pixels. Set to 0 to auto-calculate from aspect ratio.
+  
+  ```toml
+  [logo]
+  height = 0
+  ```
+</ParamField>
+
+### UI layout configuration
+
+Define which information to display and how to organize it.
+
+```toml
+[[ui.layout]]
+name = "system"
+
+[[ui.layout.rows]]
+key = "host"
+label = "Computer"
+icon = "💻"
+
+[[ui.layout.rows]]
+key = "os"
+
+[[ui.layout.rows]]
+key = "kernel"
+```
+
+#### Available row keys
+
+<Accordion title="Built-in row keys">
+  | Key | Description |
+  |-----|-------------|
+  | `date` | Current date and time |
+  | `host` | Hostname |
+  | `os` | Operating system name and version |
+  | `kernel` | Kernel version |
+  | `cpu` | CPU model and specifications |
+  | `gpu` | GPU information |
+  | `ram` | RAM usage (used / total) |
+  | `disk` | Disk usage |
+  | `uptime` | System uptime |
+  | `shell` | Current shell |
+  | `packages` | Package manager counts |
+  | `de` | Desktop environment |
+  | `wm` | Window manager |
+  | `playing` | Currently playing media |
+</Accordion>
+
+<Accordion title="Plugin row keys">
+  Plugin keys use the format `plugin.<name>` where `<name>` is the plugin identifier.
+  
+  Examples:
+  - `plugin.weather` - Weather information
+  - `plugin.spotify` - Spotify now playing
+  - `plugin.custom` - Custom plugin data
+</Accordion>
+
+#### Row customization
+
+<ParamField path="key" type="string" required>
+  Data key identifying what information to display.
+</ParamField>
+
+<ParamField path="label" type="string" optional>
+  Custom label override. If not specified, uses the default label.
+  
+  ```toml
+  [[ui.layout.rows]]
+  key = "cpu"
+  label = "Processor"
+  ```
+</ParamField>
+
+<ParamField path="icon" type="string" optional>
+  Custom icon override. If not specified, uses the default icon.
+  
+  ```toml
+  [[ui.layout.rows]]
+  key = "ram"
+  icon = "🧠"
+  ```
+</ParamField>
+
+<ParamField path="color" type="string" optional>
+  Value foreground color. Supported color names depend on the terminal.
+  
+  ```toml
+  [[ui.layout.rows]]
+  key = "cpu"
+  color = "cyan"
+  ```
+</ParamField>
+
+<ParamField path="auto_wrap" type="boolean" default="false">
+  Enable automatic word wrapping for long values.
+  
+  ```toml
+  [[ui.layout.rows]]
+  key = "kernel"
+  auto_wrap = true
+  ```
+</ParamField>
+
+### Package manager configuration
+
+When built with `DRAC_ENABLE_PACKAGECOUNT`, you can configure which package managers to query.
+
+```toml
+[packages]
+enabled_managers = ["cargo", "pacman", "nix", "flatpak"]
+```
+
+Available package managers vary by platform:
+
+<Tabs>
+  <Tab title="Linux">
+    - `pacman` (Arch)
+    - `apt` (Debian/Ubuntu)
+    - `dnf` (Fedora)
+    - `flatpak`
+    - `snap`
+    - `nix`
+    - `cargo`
+    - `npm`
+  </Tab>
+  
+  <Tab title="macOS">
+    - `homebrew`
+    - `macports`
+    - `nix`
+    - `cargo`
+    - `npm`
+  </Tab>
+  
+  <Tab title="Windows">
+    - `chocolatey`
+    - `scoop`
+    - `winget`
+    - `cargo`
+    - `npm`
+  </Tab>
+</Tabs>
+
+### Plugin configuration
+
+When built with `DRAC_ENABLE_PLUGINS`, configure plugins in the `[plugins]` section.
+
+```toml
+[plugins]
+paths = ["/usr/lib/draconis++/plugins", "~/.local/share/draconis++/plugins"]
+
+[plugins.weather]
+provider = "OpenMeteo"
+latitude = 40.7128
+longitude = -74.0060
+units = "metric"
+```
+
+### Complete TOML example
+
+```toml
+# General configuration
+[general]
+name = "Alice"
+language = "en"
+
+# Logo configuration
+[logo]
+image_path = "/home/alice/Pictures/arch-logo.png"
+protocol = "kitty"
+width = 200
+height = 0
+
+# UI Layout
+[[ui.layout]]
+name = "intro"
+[[ui.layout.rows]]
+key = "date"
+
+[[ui.layout]]
+name = "system"
+[[ui.layout.rows]]
+key = "host"
+label = "Computer"
+[[ui.layout.rows]]
+key = "os"
+[[ui.layout.rows]]
+key = "kernel"
+
+[[ui.layout]]
+name = "hardware"
+[[ui.layout.rows]]
+key = "cpu"
+icon = "⚡"
+[[ui.layout.rows]]
+key = "gpu"
+[[ui.layout.rows]]
+key = "ram"
+color = "cyan"
+[[ui.layout.rows]]
+key = "disk"
+[[ui.layout.rows]]
+key = "uptime"
+
+[[ui.layout]]
+name = "software"
+[[ui.layout.rows]]
+key = "shell"
+[[ui.layout.rows]]
+key = "packages"
+
+[[ui.layout]]
+name = "session"
+[[ui.layout.rows]]
+key = "de"
+[[ui.layout.rows]]
+key = "wm"
+[[ui.layout.rows]]
+key = "playing"
+
+# Package managers
+[packages]
+enabled_managers = ["pacman", "flatpak", "cargo"]
+
+# Plugins
+[plugins]
+paths = ["/usr/lib/draconis++/plugins"]
+
+[plugins.weather]
+provider = "OpenMeteo"
+latitude = 40.7128
+longitude = -74.0060
+units = "metric"
+```
+
+## Precompiled configuration
+
+Precompiled configuration embeds all settings directly into the binary, creating a fully portable executable with no external dependencies.
+
+### Enable precompiled configuration
+
+Configure the build with precompiled config enabled:
+
+```bash
+just configure -DDRAC_PRECOMPILED_CONFIG=true
+just build
+```
+
+Or using Meson directly:
+
+```bash
+meson setup build -Dprecompiled_config=enabled
+meson compile -C build
+```
+
+### Configuration file
+
+Copy the example configuration header:
+
+```bash
+cp config.example.hpp config.hpp
+```
+
+Edit `config.hpp` with your settings. This file is located in the root of the source directory.
+
+### Basic structure
+
+```cpp
+#pragma once
+
+#if DRAC_PRECOMPILED_CONFIG
+
+#include <array>
+#include <Drac++/Config/PrecompiledLayout.hpp>
+
+namespace draconis::config {
+  // Username
+  constexpr const char* DRAC_USERNAME = "User";
+  
+  // Logo configuration
+  inline constexpr PrecompiledLogo DRAC_LOGO = {
+    .path     = "/path/to/logo.png",
+    .protocol = "kitty",
+    .width    = 200,
+    .height   = 0,
+  };
+  
+  // UI Layout groups
+  inline constexpr std::array<PrecompiledLayoutRow, 3> DRAC_UI_SYSTEM_ROWS = {
+    Row("host"),
+    Row("os"),
+    Row("kernel"),
+  };
+  
+  inline constexpr std::array<PrecompiledLayoutGroup, 1> DRAC_UI_LAYOUT = {
+    Group("system", DRAC_UI_SYSTEM_ROWS),
+  };
+}
+
+#endif // DRAC_PRECOMPILED_CONFIG
+```
+
+### Username configuration
+
+```cpp
+constexpr const char* DRAC_USERNAME = "Alice";
+```
+
+### Logo configuration
+
+```cpp
+// No logo (use ASCII art)
+inline constexpr PrecompiledLogo DRAC_LOGO = {};
+
+// With custom logo
+inline constexpr PrecompiledLogo DRAC_LOGO = {
+  .path     = "/home/alice/Pictures/logo.png",
+  .protocol = "kitty",
+  .width    = 200,
+  .height   = 0,  // Auto-calculate from aspect ratio
+};
+```
+
+### Layout configuration
+
+Define rows and groups using the `Row()` and `Group()` helpers:
+
+```cpp
+// Define row arrays
+inline constexpr std::array<PrecompiledLayoutRow, 3> DRAC_UI_SYSTEM_ROWS = {
+  Row("host"),
+  Row("os"),
+  Row("kernel"),
+};
+
+inline constexpr std::array<PrecompiledLayoutRow, 5> DRAC_UI_HARDWARE_ROWS = {
+  Row("cpu"),
+  Row("gpu"),
+  Row("ram"),
+  Row("disk"),
+  Row("uptime"),
+};
+
+// Combine into layout
+inline constexpr std::array<PrecompiledLayoutGroup, 2> DRAC_UI_LAYOUT = {
+  Group("system", DRAC_UI_SYSTEM_ROWS),
+  Group("hardware", DRAC_UI_HARDWARE_ROWS),
+};
+```
+
+### Custom labels and icons
+
+```cpp
+inline constexpr std::array<PrecompiledLayoutRow, 3> DRAC_UI_CUSTOM_ROWS = {
+  Row("cpu", "Processor", "⚡"),      // Custom label and icon
+  Row("ram", "Memory"),                // Custom label only
+  Row("disk"),                         // Default label and icon
+};
+```
+
+<Note>
+  The array size in the template parameter (e.g., `std::array<..., 3>`) must match the actual number of elements in the initializer list.
+</Note>
+
+### Package manager configuration
+
+When `DRAC_ENABLE_PACKAGECOUNT` is enabled:
+
+```cpp
+#if DRAC_ENABLE_PACKAGECOUNT
+#include <Drac++/Services/Packages.hpp>
+
+constexpr services::packages::Manager DRAC_ENABLED_PACKAGE_MANAGERS = 
+  services::packages::Manager::Cargo | 
+  services::packages::Manager::Pacman | 
+  services::packages::Manager::Nix;
+#endif
+```
+
+### Plugin configuration
+
+When `DRAC_ENABLE_PLUGINS` is enabled, configure plugins directly:
+
+```cpp
+#include "plugins/weather/WeatherConfig.hpp"
+
+inline constexpr auto WEATHER_CONFIG = weather::config::MakeConfig(
+  weather::config::Provider::OpenMeteo,
+  weather::config::Units::Metric,
+  weather::config::Coordinates { 40.7128, -74.0060 }  // NYC
+);
+```
+
+### Static plugins
+
+With precompiled config and static plugins, create a fully portable binary:
+
+```bash
+just configure -Dprecompiled_config=enabled -Dstatic_plugins=weather,spotify
+just build
+```
+
+The resulting binary has no external dependencies and includes all plugins.
+
+## Logo customization
+
+### Supported image protocols
+
+Draconis++ supports multiple terminal image protocols:
+
+<Tabs>
+  <Tab title="Kitty">
+    The Kitty terminal graphics protocol provides high-quality image rendering.
+    
+    ```bash
+    draconis++ --logo-protocol kitty --logo-path ~/logo.png
+    ```
+    
+    Works with: Kitty, WezTerm, Konsole (with plugin)
+  </Tab>
+  
+  <Tab title="Kitty Direct">
+    Direct rendering mode for Kitty protocol.
+    
+    ```bash
+    draconis++ --logo-protocol kitty-direct --logo-path ~/logo.png
+    ```
+    
+    May provide better performance in some terminals.
+  </Tab>
+  
+  <Tab title="iTerm2">
+    iTerm2 inline images protocol.
+    
+    ```bash
+    draconis++ --logo-protocol iterm2 --logo-path ~/logo.png
+    ```
+    
+    Works with: iTerm2, WezTerm
+  </Tab>
+</Tabs>
+
+### Image requirements
+
+- **Formats**: PNG, JPEG, GIF (depends on terminal support)
+- **Size**: Any size (will be scaled to specified dimensions)
+- **Transparency**: Supported in PNG format
+
+### Logo sizing
+
+```bash
+# Specify width only (height auto-calculated)
+draconis++ --logo-path ~/logo.png --logo-width 200
+
+# Specify both dimensions
+draconis++ --logo-path ~/logo.png --logo-width 200 --logo-height 200
+
+# Let terminal decide (use image's native size)
+draconis++ --logo-path ~/logo.png
+```
+
+### Fallback to ASCII art
+
+If the terminal doesn't support the specified protocol, Draconis++ automatically falls back to ASCII art.
+
+## Examples
+
+### Minimal configuration
+
+```toml
+[general]
+name = "User"
+
+[[ui.layout]]
+name = "system"
+[[ui.layout.rows]]
+key = "os"
+[[ui.layout.rows]]
+key = "kernel"
+```
+
+### Custom logo setup
+
+```toml
+[logo]
+image_path = "/home/user/Pictures/custom-logo.png"
+protocol = "kitty"
+width = 250
+height = 0
+```
+
+### Multi-language setup
+
+```toml
+[general]
+language = "es"  # Spanish interface
+```
+
+### Complete layout customization
+
+```toml
+[[ui.layout]]
+name = "overview"
+[[ui.layout.rows]]
+key = "host"
+label = "💻 Computer"
+[[ui.layout.rows]]
+key = "os"
+label = "🐧 System"
+[[ui.layout.rows]]
+key = "cpu"
+label = "⚡ Processor"
+color = "yellow"
+[[ui.layout.rows]]
+key = "ram"
+label = "🧠 Memory"
+color = "cyan"
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Configuration file not found">
+    Run `draconis++ --show-config-path` to see where Draconis++ expects the configuration file.
+    
+    Create the directory if it doesn't exist:
+    ```bash
+    mkdir -p ~/.config/draconis++
+    ```
+  </Accordion>
+  
+  <Accordion title="Logo not displaying">
+    Check:
+    1. Your terminal supports the specified protocol (Kitty, iTerm2)
+    2. The image file exists and is readable
+    3. The path is absolute, not relative
+    4. Try a different protocol: `--logo-protocol kitty` or `--logo-protocol iterm2`
+  </Accordion>
+  
+  <Accordion title="TOML parse errors">
+    Validate your TOML syntax:
+    ```bash
+    # Use a TOML validator
+    python3 -c "import tomllib; tomllib.load(open('config.toml', 'rb'))"
+    ```
+    
+    Common issues:
+    - Missing quotes around strings
+    - Incorrect table syntax
+    - Duplicate keys
+  </Accordion>
+  
+  <Accordion title="Precompiled config not used">
+    Verify the build was configured with precompiled config:
+    ```bash
+    draconis++ --show-config-path
+    ```
+    
+    Should output:
+    ```
+    Using precompiled configuration (no external config file).
+    ```
+    
+    If not, rebuild with:
+    ```bash
+    just configure -Dprecompiled_config=enabled
+    just build
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="CLI overview" icon="book" href="/guides/cli/overview">
+    Introduction to the Draconis++ CLI tool.
+  </Card>
+  
+  <Card title="Command reference" icon="terminal" href="/guides/cli/usage">
+    Complete reference for all CLI flags and options.
+  </Card>
+</CardGroup>

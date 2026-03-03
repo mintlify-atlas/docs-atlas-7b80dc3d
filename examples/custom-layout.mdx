@@ -1,0 +1,281 @@
+---
+title: Custom UI layout
+description: Customize the Draconis++ output layout and formatting
+---
+
+Draconis++ provides multiple ways to customize how system information is displayed, including JSON output, custom templates, and programmatic UI generation.
+
+## JSON output
+
+Generate machine-readable JSON output for scripting and automation:
+
+```cpp
+#include <Drac++/Core/System.hpp>
+#include <Drac++/Utils/CacheManager.hpp>
+#include <glaze/glaze.hpp>
+
+struct SystemData {
+  String os;
+  String kernel;
+  String host;
+  String cpu;
+  String gpu;
+};
+
+namespace glz {
+  template <>
+  struct meta<SystemData> {
+    using T = SystemData;
+    static constexpr auto value = object(
+      "os", &T::os,
+      "kernel", &T::kernel,
+      "host", &T::host,
+      "cpu", &T::cpu,
+      "gpu", &T::gpu
+    );
+  };
+}
+
+auto main() -> i32 {
+  using namespace draconis::core::system;
+  using draconis::utils::cache::CacheManager;
+
+  CacheManager cache;
+  SystemData data;
+
+  if (auto res = GetOperatingSystem(cache); res)
+    data.os = std::format("{} {}", res->name, res->version);
+  if (auto res = GetKernelVersion(cache); res)
+    data.kernel = *res;
+  if (auto res = GetHost(cache); res)
+    data.host = *res;
+  if (auto res = GetCPUModel(cache); res)
+    data.cpu = *res;
+  if (auto res = GetGPUModel(cache); res)
+    data.gpu = *res;
+
+  String json;
+  glz::write_json(data, json);
+  std::cout << json << "\n";
+
+  return 0;
+}
+```
+
+Output:
+
+```json
+{
+  "os": "Arch Linux",
+  "kernel": "6.6.1-arch1-1",
+  "host": "Desktop-PC",
+  "cpu": "AMD Ryzen 9 5950X",
+  "gpu": "NVIDIA GeForce RTX 3090"
+}
+```
+
+## Compact format with templates
+
+Create single-line output using template strings:
+
+```cpp
+#include <Drac++/Core/System.hpp>
+#include <Drac++/Utils/CacheManager.hpp>
+#include <format>
+
+auto printCompact(const String& formatTemplate) -> void {
+  using namespace draconis::core::system;
+  using draconis::utils::cache::CacheManager;
+
+  CacheManager cache;
+  Map<String, String> placeholders;
+
+  // Collect data
+  if (auto res = GetHost(cache); res)
+    placeholders["host"] = *res;
+  if (auto res = GetCPUModel(cache); res)
+    placeholders["cpu"] = *res;
+  if (auto res = GetMemInfo(cache); res)
+    placeholders["ram"] = std::format("{} GiB", BytesToGiB(res->usedBytes));
+
+  // Replace placeholders
+  String output = formatTemplate;
+  for (const auto& [key, value] : placeholders) {
+    String placeholder = "{" + key + "}";
+    size_t pos = 0;
+    while ((pos = output.find(placeholder, pos)) != String::npos) {
+      output.replace(pos, placeholder.length(), value);
+      pos += value.length();
+    }
+  }
+
+  std::cout << output << "\n";
+}
+
+auto main() -> i32 {
+  printCompact("{host} | {cpu} | {ram}");
+  return 0;
+}
+```
+
+Output:
+
+```
+Desktop-PC | AMD Ryzen 9 5950X | 16 GiB
+```
+
+## Custom UI with formatting
+
+Build a custom UI with colored output and formatting:
+
+```cpp
+#include <Drac++/Core/System.hpp>
+#include <Drac++/Utils/CacheManager.hpp>
+#include <format>
+
+struct UIConfig {
+  String labelColor = "\033[1;36m";  // Cyan
+  String valueColor = "\033[0;37m";  // White
+  String resetColor = "\033[0m";
+  u32 labelWidth = 20;
+};
+
+auto printField(const UIConfig& config, const String& label, const String& value) -> void {
+  std::cout << config.labelColor
+            << std::format("{:<{}}", label, config.labelWidth)
+            << config.resetColor
+            << config.valueColor
+            << value
+            << config.resetColor
+            << "\n";
+}
+
+auto main() -> i32 {
+  using namespace draconis::core::system;
+  using draconis::utils::cache::CacheManager;
+
+  UIConfig config;
+  CacheManager cache;
+
+  std::cout << "\n";
+  std::cout << config.labelColor << "System Information" << config.resetColor << "\n";
+  std::cout << "==================\n\n";
+
+  if (auto res = GetOperatingSystem(cache); res)
+    printField(config, "Operating System", std::format("{} {}", res->name, res->version));
+
+  if (auto res = GetKernelVersion(cache); res)
+    printField(config, "Kernel", *res);
+
+  if (auto res = GetHost(cache); res)
+    printField(config, "Host", *res);
+
+  if (auto res = GetShell(cache); res)
+    printField(config, "Shell", *res);
+
+  std::cout << "\n";
+  std::cout << config.labelColor << "Hardware" << config.resetColor << "\n";
+  std::cout << "=========\n\n";
+
+  if (auto res = GetCPUModel(cache); res)
+    printField(config, "CPU", *res);
+
+  if (auto res = GetGPUModel(cache); res)
+    printField(config, "GPU", *res);
+
+  if (auto res = GetMemInfo(cache); res) {
+    String memStr = std::format("{} / {} GiB",
+                                 BytesToGiB(res->usedBytes),
+                                 BytesToGiB(res->totalBytes));
+    printField(config, "Memory", memStr);
+  }
+
+  std::cout << "\n";
+
+  return 0;
+}
+```
+
+## Configuration-based layout
+
+Load layout configuration from a file:
+
+```cpp
+#include <Drac++/Core/System.hpp>
+#include <Drac++/Utils/CacheManager.hpp>
+#include <glaze/glaze.hpp>
+#include <fstream>
+
+struct LayoutConfig {
+  Vec<String> fields;  // Which fields to display
+  String separator = " | ";
+  bool showLabels = true;
+};
+
+namespace glz {
+  template <>
+  struct meta<LayoutConfig> {
+    using T = LayoutConfig;
+    static constexpr auto value = object(
+      "fields", &T::fields,
+      "separator", &T::separator,
+      "showLabels", &T::showLabels
+    );
+  };
+}
+
+auto loadConfig(const String& path) -> Result<LayoutConfig> {
+  std::ifstream file(path);
+  if (!file)
+    ERR(IoError, "Failed to open config file");
+
+  String content((std::istreambuf_iterator<char>(file)), {});
+  LayoutConfig config;
+
+  if (auto err = glz::read_json(config, content); err)
+    ERR(ParseError, "Failed to parse config");
+
+  return config;
+}
+
+auto main() -> i32 {
+  Result<LayoutConfig> configResult = loadConfig("layout.json");
+  if (!configResult) {
+    std::cerr << "Error: " << configResult.error().message << "\n";
+    return 1;
+  }
+
+  // Use config to customize output...
+  return 0;
+}
+```
+
+Example `layout.json`:
+
+```json
+{
+  "fields": ["os", "kernel", "host", "cpu", "ram"],
+  "separator": " | ",
+  "showLabels": true
+}
+```
+
+## Best practices
+
+<Steps>
+  <Step title="Use caching">
+    Always use a `CacheManager` to avoid redundant system calls. The cache persists across runs for better performance.
+  </Step>
+
+  <Step title="Handle errors gracefully">
+    Check `Result` types before using values. Not all information is available on all platforms.
+  </Step>
+
+  <Step title="Format numbers appropriately">
+    Use helper functions like `BytesToGiB()` for human-readable output. Raw byte values are difficult to read.
+  </Step>
+
+  <Step title="Consider your audience">
+    Use JSON for machine consumption, colored terminal output for humans, and compact formats for status bars.
+  </Step>
+</Steps>

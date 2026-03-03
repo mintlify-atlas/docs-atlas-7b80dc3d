@@ -1,0 +1,466 @@
+---
+title: "Command-line reference"
+description: "Complete reference for all Draconis++ CLI flags and options"
+---
+
+This page provides a comprehensive reference for all command-line arguments and flags available in Draconis++.
+
+## Basic usage
+
+```bash
+draconis++ [OPTIONS]
+```
+
+## Global options
+
+### Help and version
+
+<ResponseField name="--help" type="flag">
+  Display help information and exit.
+  
+  ```bash
+  draconis++ --help
+  ```
+</ResponseField>
+
+<ResponseField name="--version" type="flag">
+  Display version information including build date and git hash.
+  
+  ```bash
+  draconis++ --version
+  ```
+  
+  Example output:
+  ```
+  draconis++ 1.0.0 (2024-03-03) [a1b2c3d]
+  ```
+</ResponseField>
+
+## Output modes
+
+### Display modes
+
+<ParamField path="--no-ascii" type="flag" default="false">
+  Disable ASCII art display and show only system information.
+  
+  ```bash
+  draconis++ --no-ascii
+  ```
+</ParamField>
+
+<ParamField path="--json" type="flag" default="false">
+  Output system information in JSON format. Overrides `--no-ascii`.
+  
+  ```bash
+  draconis++ --json
+  ```
+  
+  Example output:
+  ```json
+  {"host":"mycomputer","os":"Linux","kernel":"6.5.0",...}
+  ```
+</ParamField>
+
+<ParamField path="--pretty" type="flag" default="false">
+  Pretty-print JSON output with indentation. Only valid when `--json` is used.
+  
+  ```bash
+  draconis++ --json --pretty
+  ```
+  
+  Example output:
+  ```json
+  {
+    "host": "mycomputer",
+    "os": "Linux",
+    "kernel": "6.5.0"
+  }
+  ```
+</ParamField>
+
+<ParamField path="--format" type="string" default="">
+  Output system information in the specified format (requires plugin support).
+  
+  Available formats depend on loaded plugins (e.g., `markdown`, `yaml`).
+  
+  ```bash
+  draconis++ --format markdown
+  draconis++ --format yaml
+  ```
+</ParamField>
+
+<ParamField path="--compact" type="string" default="">
+  Output a single line using a template string with placeholders.
+  
+  **Available placeholders:**
+  - `{date}` - Current date
+  - `{host}` - Hostname
+  - `{os}` - Operating system
+  - `{kernel}` - Kernel version
+  - `{cpu}` - CPU information
+  - `{gpu}` - GPU information
+  - `{ram}` - RAM usage
+  - `{disk}` - Disk usage
+  - `{uptime}` - System uptime
+  - `{shell}` - Current shell
+  - `{de}` - Desktop environment
+  - `{wm}` - Window manager
+  - `{packages}` - Package counts
+  - `{weather}` - Weather information (if plugin enabled)
+  - `{playing}` - Currently playing media
+  
+  ```bash
+  draconis++ --compact "{host} | {cpu} | {ram}"
+  draconis++ --compact "{os} on {kernel} | Uptime: {uptime}"
+  ```
+  
+  Example output:
+  ```
+  mycomputer | Intel Core i7-9700K @ 3.60GHz | 16GB / 32GB
+  ```
+</ParamField>
+
+## Diagnostic modes
+
+<ParamField path="-d, --doctor" type="flag" default="false">
+  Reports any failed readouts and their error messages. Useful for troubleshooting.
+  
+  ```bash
+  draconis++ --doctor
+  draconis++ -d
+  ```
+  
+  Example output:
+  ```
+  System Health Report
+  ====================
+  
+  Failed readouts:
+  - GPU: Failed to detect discrete GPU
+  - Weather: API key not configured
+  
+  Successful readouts: 12/14
+  ```
+</ParamField>
+
+<ParamField path="--benchmark" type="flag" default="false">
+  Print timing information for each data source to measure performance.
+  
+  ```bash
+  draconis++ --benchmark
+  ```
+  
+  Example output:
+  ```
+  Benchmark Results
+  =================
+  CPU:      12.3ms
+  GPU:       8.7ms
+  RAM:       2.1ms
+  Disk:     15.4ms
+  Total:    38.5ms
+  ```
+</ParamField>
+
+## Logging and debugging
+
+<ParamField path="-V, --verbose" type="flag" default="false">
+  Enable verbose logging. Overrides `--log-level`. Sets log level to Debug.
+  
+  ```bash
+  draconis++ --verbose
+  draconis++ -V
+  ```
+</ParamField>
+
+<ParamField path="-l, --log-level" type="LogLevel" default="Info">
+  Set the minimum log level for output.
+  
+  Valid values: `Trace`, `Debug`, `Info`, `Warn`, `Error`, `Critical`
+  
+  ```bash
+  draconis++ --log-level Debug
+  draconis++ -l Warn
+  ```
+</ParamField>
+
+## Cache management
+
+<ParamField path="--clear-cache" type="flag" default="false">
+  Clears the cache and exits. This removes all cached data, including in-memory and on-disk copies.
+  
+  ```bash
+  draconis++ --clear-cache
+  ```
+  
+  Example output:
+  ```
+  Removed 15 files.
+  ```
+</ParamField>
+
+<ParamField path="--ignore-cache" type="flag" default="false">
+  Ignore cache for this run. Fetches fresh data without reading or writing to on-disk cache.
+  
+  ```bash
+  draconis++ --ignore-cache
+  ```
+</ParamField>
+
+## Localization
+
+<ParamField path="--lang" type="string" default="">
+  Set the language for localization. If not specified, uses the system language or configuration file setting.
+  
+  Supported languages: `en`, `es`, `fr`, `de`, and more.
+  
+  ```bash
+  draconis++ --lang es
+  draconis++ --lang fr
+  ```
+</ParamField>
+
+## Logo customization
+
+These flags override logo settings from the configuration file.
+
+<ParamField path="--logo-path" type="string" default="">
+  Path to an image file to render in the logo area.
+  
+  Supported formats depend on the protocol (typically PNG, JPEG).
+  
+  ```bash
+  draconis++ --logo-path ~/Pictures/logo.png
+  ```
+</ParamField>
+
+<ParamField path="--logo-protocol" type="string" default="kitty">
+  Logo image protocol to use for rendering.
+  
+  Valid values:
+  - `kitty` - Kitty terminal graphics protocol
+  - `kitty-direct` - Kitty direct rendering mode
+  - `iterm2` - iTerm2 inline images protocol
+  
+  ```bash
+  draconis++ --logo-protocol kitty
+  draconis++ --logo-protocol iterm2
+  ```
+</ParamField>
+
+<ParamField path="--logo-width" type="integer" default="0">
+  Logo image width in pixels. A value of 0 uses the default width.
+  
+  ```bash
+  draconis++ --logo-width 200
+  ```
+</ParamField>
+
+<ParamField path="--logo-height" type="integer" default="0">
+  Logo image height in pixels. A value of 0 automatically calculates height from aspect ratio.
+  
+  ```bash
+  draconis++ --logo-height 150
+  draconis++ --logo-width 200 --logo-height 200
+  ```
+</ParamField>
+
+## Plugin management
+
+These options are only available when Draconis++ is built with plugin support (`DRAC_ENABLE_PLUGINS`).
+
+<ParamField path="--list-plugins" type="flag" default="false">
+  List all available and loaded plugins.
+  
+  ```bash
+  draconis++ --list-plugins
+  ```
+  
+  Example output:
+  ```
+  Loaded Plugins:
+  - weather (v1.0.0) - Weather information provider
+  - spotify (v1.0.0) - Now playing from Spotify
+  
+  Available: 2
+  Loaded: 2
+  ```
+</ParamField>
+
+<ParamField path="--plugin-info" type="string" default="">
+  Show detailed information about a specific plugin.
+  
+  ```bash
+  draconis++ --plugin-info weather
+  ```
+  
+  Example output:
+  ```
+  Plugin: weather
+  Version: 1.0.0
+  Description: Provides current weather information
+  Author: Draconis++ Team
+  Status: Loaded
+  ```
+</ParamField>
+
+## Configuration
+
+<ParamField path="--show-config-path" type="flag" default="false">
+  Display the active configuration file location and exit.
+  
+  ```bash
+  draconis++ --show-config-path
+  ```
+  
+  Example output:
+  ```
+  /home/user/.config/draconis++/config.toml
+  ```
+  
+  <Note>
+    If built with `DRAC_PRECOMPILED_CONFIG`, displays:
+    ```
+    Using precompiled configuration (no external config file).
+    ```
+  </Note>
+</ParamField>
+
+<ParamField path="--generate-completions" type="string" default="">
+  Generate shell completion script for the specified shell and exit.
+  
+  Supported shells: `bash`, `zsh`, `fish`, `powershell`
+  
+  ```bash
+  # Bash
+  draconis++ --generate-completions bash > /etc/bash_completion.d/draconis++
+  
+  # Zsh
+  draconis++ --generate-completions zsh > ~/.zsh/completions/_draconis++
+  
+  # Fish
+  draconis++ --generate-completions fish > ~/.config/fish/completions/draconis++.fish
+  
+  # PowerShell
+  draconis++ --generate-completions powershell > draconis++.ps1
+  ```
+</ParamField>
+
+## Flag precedence
+
+When multiple flags affect the same setting, the following precedence applies:
+
+1. **Command-line flags** (highest priority)
+2. **Configuration file settings**
+3. **Default values** (lowest priority)
+
+### Examples of flag interactions
+
+- `--verbose` overrides `--log-level`
+- `--json` overrides `--no-ascii`
+- Logo flags (`--logo-*`) override configuration file logo settings
+- `--lang` overrides the language setting in the configuration file
+
+## Exit codes
+
+| Code | Description |
+|------|-------------|
+| 0    | Success |
+| 1    | General failure or error |
+
+## Examples
+
+### Basic system information
+
+```bash
+# Standard output with ASCII art
+draconis++
+
+# Without ASCII art
+draconis++ --no-ascii
+```
+
+### JSON output for scripts
+
+```bash
+# Compact JSON
+draconis++ --json > system.json
+
+# Pretty-printed JSON
+draconis++ --json --pretty | jq '.cpu'
+```
+
+### Custom logo display
+
+```bash
+# Use custom logo with Kitty protocol
+draconis++ --logo-path ~/Pictures/arch-logo.png --logo-width 200
+
+# Use iTerm2 protocol
+draconis++ --logo-path ~/logo.png --logo-protocol iterm2
+```
+
+### Compact template output
+
+```bash
+# Simple template
+draconis++ --compact "{host} | {os}"
+
+# Detailed template
+draconis++ --compact "{host} | {cpu} | RAM: {ram} | Uptime: {uptime}"
+```
+
+### Diagnostics and debugging
+
+```bash
+# Check for errors
+draconis++ --doctor
+
+# Benchmark performance
+draconis++ --benchmark
+
+# Verbose logging
+draconis++ --verbose
+```
+
+### Cache management
+
+```bash
+# Clear cached data
+draconis++ --clear-cache
+
+# Run without using cache
+draconis++ --ignore-cache
+```
+
+### Localization
+
+```bash
+# Use Spanish
+draconis++ --lang es
+
+# Use French
+draconis++ --lang fr
+```
+
+### Plugin management
+
+```bash
+# List all plugins
+draconis++ --list-plugins
+
+# Get info about weather plugin
+draconis++ --plugin-info weather
+```
+
+## See also
+
+<CardGroup cols={2}>
+  <Card title="CLI overview" icon="book" href="/guides/cli/overview">
+    Introduction to the Draconis++ CLI tool.
+  </Card>
+  
+  <Card title="Customization" icon="sliders" href="/guides/cli/customization">
+    Configure Draconis++ with TOML files and custom settings.
+  </Card>
+</CardGroup>

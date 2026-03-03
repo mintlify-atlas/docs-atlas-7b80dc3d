@@ -1,0 +1,361 @@
+---
+title: Error handling
+description: Error handling with Result types and propagation patterns
+---
+
+Draconis++ uses `Result<T, E>` types for explicit, exception-free error handling inspired by Rust.
+
+## Result type
+
+The `Result<T, E>` type represents either a success value of type `T` or an error value of type `E`:
+
+```cpp
+template <typename Tp = Unit, typename Er = error::DracError>
+using Result = std::expected<Tp, Er>;
+
+template <typename Er = error::DracError>
+using Err = std::unexpected<Er>;
+
+using Unit = void;  // For Result<void>
+```
+
+<Note>
+  `Result<T>` defaults to using `DracError` as the error type, so you can write `Result<String>` instead of `Result<String, DracError>`.
+</Note>
+
+## DracError structure
+
+The library uses a structured error type with context:
+
+```cpp
+struct DracError {
+  String message;               // Descriptive error message
+  std::source_location location; // Where the error occurred
+  DracErrorCode code;           // Error category
+};
+```
+
+### Error codes
+
+```cpp
+enum class DracErrorCode : u8 {
+  ApiUnavailable,     // OS service/API unavailable
+  ConfigurationError, // Configuration issue
+  CorruptedData,      // Data corrupt or inconsistent
+  InternalError,      // Application logic error
+  InvalidArgument,    // Invalid function argument
+  IoError,            // Filesystem/pipe error
+  NetworkError,       // DNS/connection failure
+  NotFound,           // Resource not found
+  NotSupported,       // Operation not supported
+  Other,              // Unclassified error
+  OutOfMemory,        // Memory exhaustion
+  ParseError,         // Failed to parse data
+  PermissionDenied,   // Insufficient permissions
+  PermissionRequired, // Elevated privileges needed
+  PlatformSpecific,   // Platform-specific error
+  ResourceExhausted,  // System resource limit
+  Timeout,            // Operation timed out
+  UnavailableFeature, // Hardware/OS feature absent
+};
+```
+
+## Returning errors
+
+Use the `ERR` macro to create and return errors:
+
+```cpp
+auto readFile(StringView path) -> Result<String> {
+  std::ifstream file(path);
+  if (!file)
+    ERR(DracErrorCode::IoError, "Failed to open file");
+  
+  String content((std::istreambuf_iterator<char>(file)), {});
+  return content;
+}
+```
+
+### Error macros
+
+```cpp
+// Basic error with code and message
+ERR(DracErrorCode::NotFound, "User not found");
+
+// Formatted error message
+ERR_FMT(DracErrorCode::InvalidArgument, "Invalid ID: {}", userId);
+
+// Forward an existing error
+ERR_FROM(existingError);
+```
+
+<Tip>
+  The `ERR` macro automatically captures the source location (file, line, function) for better debugging.
+</Tip>
+
+## Handling results
+
+### Checking and unwrapping
+
+```cpp
+auto result = readFile("config.toml");
+
+if (result) {
+  // Success: access value
+  String content = *result;
+  std::println("Content: {}", content);
+} else {
+  // Error: access error
+  auto& error = result.error();
+  std::println("Error: {}", error.message);
+  std::println("Code: {}", static_cast<u8>(error.code));
+}
+```
+
+### Value extraction methods
+
+```cpp
+// Check if result contains a value
+if (result.has_value()) { /* ... */ }
+
+// Access value (throws if error)
+String value = result.value();
+
+// Access value with operator*
+String value = *result;
+
+// Access error (undefined if success)
+auto error = result.error();
+
+// Provide default value on error
+String value = result.value_or("default");
+```
+
+<Warning>
+  Accessing the value with `*result` or `.value()` when the Result contains an error is undefined behavior. Always check first with `if (result)` or `.has_value()`.
+</Warning>
+
+## Error propagation
+
+The `TRY` macro provides Rust-style error propagation:
+
+```cpp
+auto processFile(StringView path) -> Result<Data> {
+  // If readFile returns an error, immediately return that error
+  String content = TRY(readFile(path));
+  
+  // If parseJson returns an error, immediately return that error
+  Data data = TRY(parseJson(content));
+  
+  return data;
+}
+```
+
+This is equivalent to:
+
+```cpp
+auto processFile(StringView path) -> Result<Data> {
+  auto contentResult = readFile(path);
+  if (!contentResult)
+    return Err(contentResult.error());
+  String content = *contentResult;
+  
+  auto dataResult = parseJson(content);
+  if (!dataResult)
+    return Err(dataResult.error());
+  Data data = *dataResult;
+  
+  return data;
+}
+```
+
+### TRY_VOID for Result with no value
+
+For functions returning `Result<>` (no value):
+
+```cpp
+auto initializeSystem() -> Result<> {
+  TRY_VOID(validateConfig());
+  TRY_VOID(initializeCache());
+  TRY_VOID(connectToDatabase());
+  return {};
+}
+```
+
+<Note>
+  On MSVC, you may need to use `TRY_RESULT(var, expr)` instead of `auto var = TRY(expr)` due to compiler limitations.
+</Note>
+
+## Platform-specific error handling
+
+### Windows
+
+```cpp
+auto GetMemInfo() -> Result<ResourceUsage> {
+  MEMORYSTATUSEX memStatus;
+  memStatus.dwLength = sizeof(memStatus);
+  
+  if (!GlobalMemoryStatusEx(&memStatus))
+    ERR(DracErrorCode::ApiUnavailable, "GlobalMemoryStatusEx failed");
+  
+  return ResourceUsage{
+    .usedBytes = memStatus.ullTotalPhys - memStatus.ullAvailPhys,
+    .totalBytes = memStatus.ullTotalPhys
+  };
+}
+```
+
+### Linux
+
+```cpp
+auto GetOSVersion() -> Result<String> {
+  std::ifstream file("/etc/os-release");
+  if (!file)
+    ERR(DracErrorCode::NotFound, "/etc/os-release not found");
+  
+  String line;
+  while (std::getline(file, line)) {
+    if (line.starts_with("PRETTY_NAME=")) {
+      return line.substr(13, line.length() - 14); // Remove quotes
+    }
+  }
+  
+  ERR(DracErrorCode::ParseError, "PRETTY_NAME not found in os-release");
+}
+```
+
+### macOS
+
+```cpp
+auto GetCpuName() -> Result<String> {
+  char buffer[256];
+  size_t size = sizeof(buffer);
+  
+  if (sysctlbyname("machdep.cpu.brand_string", buffer, &size, nullptr, 0) != 0)
+    ERR(DracErrorCode::ApiUnavailable, "sysctlbyname failed");
+  
+  return String(buffer);
+}
+```
+
+## Best practices
+
+<Steps>
+  <Step title="Use Result<T> for operations that can fail">
+    ```cpp
+    // Good: Explicit failure mode
+    auto parseConfig(StringView path) -> Result<Config>;
+    
+    // Avoid: Hidden exceptions
+    auto parseConfig(StringView path) -> Config; // throws
+    ```
+  </Step>
+  
+  <Step title="Use specific error codes">
+    ```cpp
+    // Good: Specific error code
+    ERR(DracErrorCode::NotFound, "Config file not found");
+    
+    // Avoid: Generic error
+    ERR(DracErrorCode::Other, "Something went wrong");
+    ```
+  </Step>
+  
+  <Step title="Provide context in error messages">
+    ```cpp
+    // Good: Context included
+    ERR_FMT(DracErrorCode::InvalidArgument, 
+            "Invalid user ID: {} (must be positive)", userId);
+    
+    // Avoid: Vague message
+    ERR(DracErrorCode::InvalidArgument, "Invalid argument");
+    ```
+  </Step>
+  
+  <Step title="Use TRY for error propagation">
+    ```cpp
+    // Good: Clean propagation
+    String content = TRY(readFile(path));
+    Data data = TRY(parseJson(content));
+    
+    // Avoid: Manual checking
+    auto result1 = readFile(path);
+    if (!result1) return Err(result1.error());
+    auto result2 = parseJson(*result1);
+    if (!result2) return Err(result2.error());
+    ```
+  </Step>
+  
+  <Step title="Chain operations with TRY">
+    ```cpp
+    auto process() -> Result<Output> {
+      auto input = TRY(fetchInput());
+      auto validated = TRY(validate(input));
+      auto transformed = TRY(transform(validated));
+      return Output{transformed};
+    }
+    ```
+  </Step>
+</Steps>
+
+## Error handling vs exceptions
+
+| Aspect | Result&lt;T&gt; | Exceptions |
+|--------|-----------|------------|
+| Visibility | Explicit in signature | Hidden |
+| Performance | Zero-cost on success | Stack unwinding overhead |
+| Error propagation | Explicit with `TRY` | Implicit with `throw` |
+| Type safety | Compile-time checked | Runtime checked |
+| Control flow | Explicit | Non-local |
+
+<Tip>
+  Draconis++ reserves exceptions for truly exceptional situations (e.g., programmer errors, fatal failures). Use `Result<T>` for expected error conditions like file I/O, parsing, or network operations.
+</Tip>
+
+## Example: complete error handling flow
+
+```cpp
+using namespace draconis::utils::types;
+using namespace draconis::utils::error;
+
+auto readConfig(StringView path) -> Result<String> {
+  std::ifstream file(path);
+  if (!file)
+    ERR(DracErrorCode::IoError, "Failed to open config file");
+  
+  String content((std::istreambuf_iterator<char>(file)), {});
+  return content;
+}
+
+auto parseConfig(StringView content) -> Result<Config> {
+  try {
+    return toml::parse_str(content);
+  } catch (const toml::syntax_error& e) {
+    ERR_FMT(DracErrorCode::ParseError, "TOML parse error: {}", e.what());
+  }
+}
+
+auto loadConfig(StringView path) -> Result<Config> {
+  String content = TRY(readConfig(path));
+  Config config = TRY(parseConfig(content));
+  return config;
+}
+
+int main() {
+  auto config = loadConfig("config.toml");
+  
+  if (config) {
+    std::println("Config loaded successfully");
+    // Use config
+  } else {
+    auto& err = config.error();
+    std::println("Failed to load config: {}", err.message);
+    std::println("Location: {}:{}", err.location.file_name(), 
+                                     err.location.line());
+    return 1;
+  }
+  
+  return 0;
+}
+```
+
+Error definitions are in `/home/daytona/workspace/source/include/Drac++/Utils/Error.hpp:14`.

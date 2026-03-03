@@ -1,0 +1,484 @@
+---
+title: Plugin development
+description: How to create plugins for Draconis++
+---
+
+Draconis++ features a high-performance plugin system that allows you to extend functionality without modifying the core library.
+
+## Plugin types
+
+Draconis++ supports two types of plugins:
+
+- **InfoProvider**: Provides structured data (weather, media, Docker stats, etc.)
+- **OutputFormat**: Adds new output formats (JSON, YAML, Markdown, etc.)
+
+## Creating an info provider plugin
+
+Info provider plugins supply structured information that can be displayed in the UI, serialized to JSON, or used in compact format templates.
+
+### Basic plugin structure
+
+<Steps>
+
+<Step title="Create the plugin class">
+
+Create a header file for your plugin:
+
+```cpp my_plugin.hpp
+#pragma once
+
+#include <Drac++/Core/Plugin.hpp>
+#include <Drac++/Utils/Types.hpp>
+
+using namespace draconis::core::plugin;
+using namespace draconis::utils::types;
+
+class MyInfoPlugin : public IInfoProviderPlugin {
+ public:
+  MyInfoPlugin() = default;
+  
+  // IPlugin interface
+  auto getMetadata() const -> const PluginMetadata& override;
+  auto initialize(const PluginContext& ctx, ::PluginCache& cache) 
+    -> Result<Unit> override;
+  auto shutdown() -> Unit override;
+  auto isReady() const -> bool override;
+  
+  // IInfoProviderPlugin interface
+  auto getProviderId() const -> String override;
+  auto collectData(::PluginCache& cache) -> Result<Unit> override;
+  auto toJson() const -> Result<String> override;
+  auto getFields() const -> Map<String, String> override;
+  auto getDisplayValue() const -> Result<String> override;
+  auto getDisplayIcon() const -> String override;
+  auto getDisplayLabel() const -> String override;
+  auto getLastError() const -> Option<String> override;
+  auto isEnabled() const -> bool override;
+  
+ private:
+  PluginMetadata m_metadata;
+  bool m_isReady = false;
+  bool m_enabled = true;
+  String m_lastData;
+  Option<String> m_lastError;
+};
+```
+
+</Step>
+
+<Step title="Implement the plugin methods">
+
+Create the implementation file:
+
+```cpp my_plugin.cpp
+#include "my_plugin.hpp"
+#include <glaze/glaze.hpp>
+
+auto MyInfoPlugin::getMetadata() const -> const PluginMetadata& {
+  static const PluginMetadata metadata{
+    .name = "MyInfoPlugin",
+    .version = "1.0.0",
+    .author = "Your Name",
+    .description = "Provides custom information",
+    .type = PluginType::InfoProvider,
+    .dependencies = {
+      .requiresNetwork = false,
+      .requiresFilesystem = false,
+      .requiresAdmin = false,
+      .requiresCaching = true
+    }
+  };
+  return metadata;
+}
+
+auto MyInfoPlugin::initialize(const PluginContext& ctx, 
+                              ::PluginCache& cache) -> Result<Unit> {
+  // Initialize plugin state
+  // ctx.configDir contains plugin config directory
+  // ctx.cacheDir contains plugin cache directory
+  // ctx.dataDir contains plugin data directory
+  
+  m_isReady = true;
+  return {};
+}
+
+auto MyInfoPlugin::shutdown() -> Unit {
+  m_isReady = false;
+  return {};
+}
+
+auto MyInfoPlugin::isReady() const -> bool {
+  return m_isReady;
+}
+
+auto MyInfoPlugin::getProviderId() const -> String {
+  return "myinfo";
+}
+
+auto MyInfoPlugin::collectData(::PluginCache& cache) -> Result<Unit> {
+  // Check cache first
+  if (auto cached = cache.get<String>("myinfo_data"); cached) {
+    m_lastData = *cached;
+    return {};
+  }
+  
+  // Fetch fresh data
+  try {
+    m_lastData = "Fresh data from plugin";
+    
+    // Cache for 5 minutes
+    cache.set("myinfo_data", m_lastData, 300);
+    
+    m_lastError = None;
+    return {};
+  } catch (const std::exception& e) {
+    m_lastError = e.what();
+    ERR(IoError, "Failed to collect data");
+  }
+}
+
+auto MyInfoPlugin::toJson() const -> Result<String> {
+  struct Data {
+    String value;
+    String provider = "myinfo";
+  };
+  
+  Data data{.value = m_lastData};
+  
+  String json;
+  if (auto err = glz::write_json(data, json); err)
+    ERR(ParseError, "Failed to serialize to JSON");
+  
+  return json;
+}
+
+auto MyInfoPlugin::getFields() const -> Map<String, String> {
+  return {
+    {"myinfo_value", m_lastData},
+    {"myinfo_length", std::to_string(m_lastData.length())}
+  };
+}
+
+auto MyInfoPlugin::getDisplayValue() const -> Result<String> {
+  if (m_lastData.empty())
+    ERR(NotFound, "No data available");
+  return m_lastData;
+}
+
+auto MyInfoPlugin::getDisplayIcon() const -> String {
+  return "   "; // Nerd Font icon + spacing
+}
+
+auto MyInfoPlugin::getDisplayLabel() const -> String {
+  return "My Info";
+}
+
+auto MyInfoPlugin::getLastError() const -> Option<String> {
+  return m_lastError;
+}
+
+auto MyInfoPlugin::isEnabled() const -> bool {
+  return m_enabled;
+}
+```
+
+</Step>
+
+<Step title="Register the plugin">
+
+Add the plugin registration macro:
+
+```cpp my_plugin.cpp
+// At the end of the file
+DRAC_PLUGIN(MyInfoPlugin)
+```
+
+This macro automatically generates the necessary factory functions for both static and dynamic plugin builds.
+
+</Step>
+
+</Steps>
+
+## Using the plugin cache
+
+The `PluginCache` provides efficient BEVE-based caching:
+
+```cpp
+// Define a cacheable struct
+struct WeatherData {
+  String temperature;
+  String condition;
+  u32 humidity;
+};
+
+// Add glaze metadata
+namespace glz {
+  template <>
+  struct meta<WeatherData> {
+    using T = WeatherData;
+    static constexpr auto value = object(
+      "temperature", &T::temperature,
+      "condition", &T::condition,
+      "humidity", &T::humidity
+    );
+  };
+}
+
+// In your plugin's collectData():
+auto MyPlugin::collectData(::PluginCache& cache) -> Result<Unit> {
+  // Try to get from cache
+  if (auto cached = cache.get<WeatherData>("weather"); cached) {
+    m_weatherData = *cached;
+    return {};
+  }
+  
+  // Fetch fresh data
+  WeatherData fresh = fetchWeatherFromAPI();
+  
+  // Cache for 10 minutes (600 seconds)
+  cache.set("weather", fresh, 600);
+  
+  m_weatherData = fresh;
+  return {};
+}
+```
+
+## Creating an output format plugin
+
+Output format plugins allow custom serialization of system data:
+
+```cpp yaml_plugin.hpp
+#pragma once
+
+#include <Drac++/Core/Plugin.hpp>
+
+class YAMLFormatPlugin : public IOutputFormatPlugin {
+ public:
+  auto getMetadata() const -> const PluginMetadata& override;
+  auto initialize(const PluginContext& ctx, ::PluginCache& cache) 
+    -> Result<Unit> override;
+  auto shutdown() -> Unit override;
+  auto isReady() const -> bool override;
+  
+  auto formatOutput(
+    const String& formatName,
+    const Map<String, String>& data,
+    const Map<String, Map<String, String>>& pluginData
+  ) const -> Result<String> override;
+  
+  auto getFormatNames() const -> Vec<String> override;
+  auto getFileExtension(const String& formatName) const -> String override;
+  
+ private:
+  bool m_isReady = false;
+};
+```
+
+Implementation:
+
+```cpp yaml_plugin.cpp
+#include "yaml_plugin.hpp"
+#include <sstream>
+
+auto YAMLFormatPlugin::getMetadata() const -> const PluginMetadata& {
+  static const PluginMetadata metadata{
+    .name = "YAMLFormatPlugin",
+    .version = "1.0.0",
+    .author = "Your Name",
+    .description = "YAML output format support",
+    .type = PluginType::OutputFormat,
+    .dependencies = {}
+  };
+  return metadata;
+}
+
+auto YAMLFormatPlugin::initialize(const PluginContext& ctx,
+                                  ::PluginCache& cache) -> Result<Unit> {
+  m_isReady = true;
+  return {};
+}
+
+auto YAMLFormatPlugin::shutdown() -> Unit {
+  m_isReady = false;
+  return {};
+}
+
+auto YAMLFormatPlugin::isReady() const -> bool {
+  return m_isReady;
+}
+
+auto YAMLFormatPlugin::formatOutput(
+  const String& formatName,
+  const Map<String, String>& data,
+  const Map<String, Map<String, String>>& pluginData
+) const -> Result<String> {
+  std::ostringstream yaml;
+  
+  yaml << "system:\n";
+  for (const auto& [key, value] : data) {
+    yaml << "  " << key << ": " << value << "\n";
+  }
+  
+  if (!pluginData.empty()) {
+    yaml << "plugins:\n";
+    for (const auto& [pluginId, fields] : pluginData) {
+      yaml << "  " << pluginId << ":\n";
+      for (const auto& [key, value] : fields) {
+        yaml << "    " << key << ": " << value << "\n";
+      }
+    }
+  }
+  
+  return yaml.str();
+}
+
+auto YAMLFormatPlugin::getFormatNames() const -> Vec<String> {
+  return {"yaml", "yml"};
+}
+
+auto YAMLFormatPlugin::getFileExtension(const String& formatName) const 
+  -> String {
+  return "yml";
+}
+
+DRAC_PLUGIN(YAMLFormatPlugin)
+```
+
+## Building plugins
+
+### Dynamic plugin build
+
+Create a `meson.build` for your plugin:
+
+```meson
+project('my-plugin', 'cpp',
+  version: '1.0.0',
+  default_options: ['cpp_std=c++26']
+)
+
+dracpp_dep = dependency('draconis++', required: true)
+
+shared_library('my_plugin',
+  sources: ['my_plugin.cpp'],
+  dependencies: [dracpp_dep],
+  cpp_args: ['-DDRAC_PLUGIN_BUILD'],
+  install: true,
+  install_dir: get_option('libdir') / 'draconis++' / 'plugins'
+)
+```
+
+### Static plugin build
+
+For precompiled/static builds, define `DRAC_STATIC_PLUGIN_BUILD`:
+
+```meson
+static_library('my_plugin_static',
+  sources: ['my_plugin.cpp'],
+  dependencies: [dracpp_dep],
+  cpp_args: ['-DDRAC_STATIC_PLUGIN_BUILD']
+)
+```
+
+## Plugin configuration
+
+Plugins can read configuration from the plugin config directory:
+
+```cpp
+#include <toml++/toml.h>
+#include <fstream>
+
+auto MyPlugin::initialize(const PluginContext& ctx, 
+                          ::PluginCache& cache) -> Result<Unit> {
+  // Config file path: ~/.config/draconis++/plugins/myinfo.toml
+  fs::path configPath = ctx.configDir / "myinfo.toml";
+  
+  if (fs::exists(configPath)) {
+    try {
+      auto config = toml::parse_file(configPath.string());
+      
+      m_enabled = config["enabled"].value_or(true);
+      m_apiKey = config["api_key"].value_or("");
+      m_updateInterval = config["update_interval"].value_or(300);
+    } catch (const toml::parse_error& e) {
+      ERR_FMT(ParseError, "Failed to parse config: {}", e.what());
+    }
+  }
+  
+  m_isReady = true;
+  return {};
+}
+```
+
+## Plugin installation
+
+Plugins are discovered from standard search paths:
+
+**Linux/macOS:**
+- `/usr/local/lib/draconis++/plugins`
+- `/usr/lib/draconis++/plugins`
+- `~/.local/lib/draconis++/plugins`
+- `./plugins` (current directory)
+
+**Windows:**
+- `%LOCALAPPDATA%\draconis++\plugins`
+- `%APPDATA%\draconis++\plugins`
+- `%USERPROFILE%\.config\draconis++\plugins`
+- `.\plugins` (current directory)
+
+## Testing your plugin
+
+Create a test program:
+
+```cpp
+#include <Drac++/Core/PluginManager.hpp>
+#include <Drac++/Utils/CacheManager.hpp>
+#include <print>
+
+using namespace draconis::core::plugin;
+
+auto main() -> i32 {
+  auto& pluginMgr = GetPluginManager();
+  CacheManager cache;
+  
+  // Initialize plugin system
+  if (auto res = pluginMgr.initialize(); !res) {
+    std::println("Failed to initialize: {}", res.error().message);
+    return 1;
+  }
+  
+  // Load your plugin
+  if (auto res = pluginMgr.loadPlugin("my_plugin", cache); !res) {
+    std::println("Failed to load plugin: {}", res.error().message);
+    return 1;
+  }
+  
+  // Get info providers
+  for (auto* plugin : pluginMgr.getInfoProviderPlugins()) {
+    std::println("Provider: {}", plugin->getProviderId());
+    
+    if (auto res = plugin->collectData(cache); res) {
+      std::println("  Data: {}", *plugin->getDisplayValue());
+    } else {
+      std::println("  Error: {}", res.error().message);
+    }
+  }
+  
+  return 0;
+}
+```
+
+## Best practices
+
+- **Use the cache**: Always check the cache before making expensive queries
+- **Handle errors gracefully**: Return proper error codes and messages
+- **Document dependencies**: Clearly specify what your plugin requires
+- **Version your plugin**: Use semantic versioning
+- **Test on all platforms**: Ensure cross-platform compatibility
+- **Minimize allocations**: Use move semantics and avoid unnecessary copies
+- **Thread safety**: Make your plugin thread-safe if needed
+
+## Next steps
+
+- Review [platform implementation](/guides/platform-implementation) for OS-specific code
+- Explore the [plugin API reference](/api/core/plugin-manager)
+- Check out [example plugins](https://github.com/Draconis-Org/draconis-plugins) in the official repository

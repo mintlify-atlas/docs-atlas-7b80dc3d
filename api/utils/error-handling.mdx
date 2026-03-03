@@ -1,0 +1,378 @@
+---
+title: Error handling
+description: Error handling utilities including DracError and error propagation macros
+---
+
+## Overview
+
+The error handling system in Draconis++ provides structured error types and Rust-style error propagation macros. It's built on top of `std::expected` to provide type-safe error handling.
+
+**Namespace:** `draconis::utils::error`
+
+**Header:** `<Drac++/Utils/Error.hpp>`
+
+## DracErrorCode enum
+
+Error codes for OS-level and general operations.
+
+```cpp
+enum class DracErrorCode : types::u8
+```
+
+### Values
+
+| Code | Description |
+|------|-------------|
+| `ApiUnavailable` | A required OS service/API is unavailable or failed unexpectedly at runtime |
+| `ConfigurationError` | Configuration or environment issue |
+| `CorruptedData` | Data present but corrupt or inconsistent |
+| `InternalError` | An error occurred within the application's OS abstraction code logic |
+| `InvalidArgument` | An invalid argument was passed to a function or method |
+| `IoError` | General I/O error (filesystem, pipes, etc.) |
+| `NetworkError` | A network-related error occurred (e.g., DNS resolution, connection failure) |
+| `NotFound` | A required resource (file, registry key, device, API endpoint) was not found |
+| `NotSupported` | The requested operation is not supported on this platform, version, or configuration |
+| `Other` | A generic or unclassified error originating from the OS or an external library |
+| `OutOfMemory` | The system ran out of memory or resources to complete the operation |
+| `ParseError` | Failed to parse data obtained from the OS (e.g., file content, API output) |
+| `PermissionDenied` | Insufficient permissions to perform the operation |
+| `PermissionRequired` | Operation requires elevated privileges |
+| `PlatformSpecific` | An unmapped error specific to the underlying OS platform occurred (check message) |
+| `ResourceExhausted` | System resource limit reached (not memory) |
+| `Timeout` | An operation timed out (e.g., waiting for IPC reply) |
+| `UnavailableFeature` | Feature not present on this hardware/OS |
+
+## DracError struct
+
+Holds structured information about an OS-level error.
+
+```cpp
+struct DracError {
+  types::String message;
+  std::source_location location;
+  DracErrorCode code;
+}
+```
+
+### Fields
+
+<ParamField path="message" type="types::String">
+  A descriptive error message, potentially including platform details
+</ParamField>
+
+<ParamField path="location" type="std::source_location">
+  The source location where the error occurred (file, line, function)
+</ParamField>
+
+<ParamField path="code" type="DracErrorCode">
+  The general category of the error
+</ParamField>
+
+### Constructor
+
+```cpp
+DracError(
+  const DracErrorCode errc,
+  types::String msg,
+  const std::source_location& loc = std::source_location::current()
+)
+```
+
+<ParamField path="errc" type="const DracErrorCode" required>
+  The error code category
+</ParamField>
+
+<ParamField path="msg" type="types::String" required>
+  The error message
+</ParamField>
+
+<ParamField path="loc" type="const std::source_location&" default="std::source_location::current()">
+  The source location (automatically captured if not provided)
+</ParamField>
+
+## Error creation macros
+
+These macros simplify creating and returning errors.
+
+### ERR
+
+Creates and returns an error with a code and message.
+
+```cpp
+ERR(errc, msg)
+```
+
+<ParamField path="errc" type="DracErrorCode" required>
+  The error code
+</ParamField>
+
+<ParamField path="msg" type="types::String" required>
+  The error message
+</ParamField>
+
+**Example:**
+```cpp
+auto openFile(const String& path) -> Result<File> {
+  if (!exists(path)) {
+    ERR(DracErrorCode::NotFound, "File does not exist");
+  }
+  // ...
+}
+```
+
+### ERR_FMT
+
+Creates and returns a formatted error message.
+
+```cpp
+ERR_FMT(errc, fmt, ...)
+```
+
+<ParamField path="errc" type="DracErrorCode" required>
+  The error code
+</ParamField>
+
+<ParamField path="fmt" type="format string" required>
+  Format string (std::format style)
+</ParamField>
+
+<ParamField path="..." type="variadic">
+  Format arguments
+</ParamField>
+
+**Example:**
+```cpp
+auto readFile(const String& path) -> Result<String> {
+  if (size > MAX_SIZE) {
+    ERR_FMT(
+      DracErrorCode::ResourceExhausted,
+      "File too large: {} bytes (max: {})",
+      size, MAX_SIZE
+    );
+  }
+  // ...
+}
+```
+
+### ERR_FROM
+
+Returns an error constructed from an existing error object.
+
+```cpp
+ERR_FROM(err)
+```
+
+<ParamField path="err" type="DracError" required>
+  The error object to return
+</ParamField>
+
+## Error propagation macros
+
+These macros provide Rust-style error propagation using the `?` operator pattern.
+
+### TRY
+
+Propagates errors from `Result<T>` (non-void types).
+
+```cpp
+TRY(expr)
+```
+
+<ParamField path="expr" type="Result<T>" required>
+  An expression returning a `Result<T, E>` where T is not void
+</ParamField>
+
+Evaluates the expression. If it contains an error, immediately returns from the enclosing function with that error. Otherwise, extracts and yields the success value.
+
+**Example:**
+```cpp
+auto fetchData() -> Result<Data> {
+  // Without TRY:
+  auto urlResult = buildUrl();
+  if (!urlResult) return Err(urlResult.error());
+  String url = *urlResult;
+
+  // With TRY:
+  String url = TRY(buildUrl());
+
+  // Chain multiple fallible operations:
+  auto response = TRY(httpGet(url));
+  auto parsed = TRY(parseJson(response));
+  return parsed;
+}
+```
+
+<Note>
+**Platform differences:**
+- GCC/Clang: Uses GNU statement expressions
+- MSVC: Uses lambda-based implementation
+</Note>
+
+### TRY_VOID
+
+Propagates errors from `Result<void>` (void types).
+
+```cpp
+TRY_VOID(expr)
+```
+
+<ParamField path="expr" type="Result<void>" required>
+  An expression returning a `Result<void, E>`
+</ParamField>
+
+Evaluates the expression. If it contains an error, immediately returns from the enclosing function with that error. Otherwise, execution continues.
+
+**Example:**
+```cpp
+auto initializeSystem() -> Result<> {
+  // Propagate errors from void-returning operations
+  TRY_VOID(validateConfig());
+  TRY_VOID(initializeCache());
+  TRY_VOID(connectToDatabase());
+  return {};
+}
+```
+
+### TRY_RESULT (MSVC only)
+
+Alternative error propagation for MSVC without exceptions.
+
+```cpp
+TRY_RESULT(var, expr)
+```
+
+<ParamField path="var" type="variable" required>
+  Variable to assign the result to
+</ParamField>
+
+<ParamField path="expr" type="Result<T>" required>
+  Expression returning a Result
+</ParamField>
+
+**Example:**
+```cpp
+// MSVC alternative without exceptions
+String url;
+TRY_RESULT(url, buildUrl());
+```
+
+## Complete example
+
+```cpp
+#include <Drac++/Utils/Error.hpp>
+#include <Drac++/Utils/Types.hpp>
+
+using namespace draconis::utils::error;
+using namespace draconis::utils::types;
+
+// Helper function that can fail
+auto readConfig(const String& path) -> Result<Config> {
+  if (!std::filesystem::exists(path)) {
+    ERR(DracErrorCode::NotFound, "Config file not found");
+  }
+  
+  // Read file
+  auto contents = TRY(readFile(path));
+  
+  // Parse config
+  auto config = TRY(parseConfig(contents));
+  
+  return config;
+}
+
+// Function using TRY for error propagation
+auto initialize(const String& configPath) -> Result<> {
+  // Load config (propagate any errors)
+  auto config = TRY(readConfig(configPath));
+  
+  // Validate (void result)
+  TRY_VOID(validateConfig(config));
+  
+  // Check permissions
+  if (!hasPermissions(config.dataDir)) {
+    ERR_FMT(
+      DracErrorCode::PermissionDenied,
+      "No write access to data directory: {}",
+      config.dataDir
+    );
+  }
+  
+  // Initialize subsystems
+  TRY_VOID(initCache(config));
+  TRY_VOID(initDatabase(config));
+  
+  return {};
+}
+
+// Error handling in main
+auto main() -> int {
+  auto result = initialize("/etc/app/config.toml");
+  
+  if (!result) {
+    const auto& err = result.error();
+    
+    // Access error details
+    std::cerr << "Error: " << err.message << std::endl;
+    std::cerr << "Code: " << static_cast<int>(err.code) << std::endl;
+    std::cerr << "Location: " << err.location.file_name()
+              << ":" << err.location.line() << std::endl;
+    
+    return 1;
+  }
+  
+  std::cout << "Initialized successfully" << std::endl;
+  return 0;
+}
+```
+
+## Best practices
+
+1. **Use TRY macros for clean error propagation**
+   ```cpp
+   // Good
+   auto data = TRY(fetchData());
+   
+   // Avoid
+   auto result = fetchData();
+   if (!result) return Err(result.error());
+   auto data = *result;
+   ```
+
+2. **Choose appropriate error codes**
+   ```cpp
+   // File not found
+   ERR(DracErrorCode::NotFound, "Config file missing");
+   
+   // Permission issues
+   ERR(DracErrorCode::PermissionDenied, "Cannot write to directory");
+   
+   // Invalid input
+   ERR(DracErrorCode::InvalidArgument, "Port must be between 1-65535");
+   ```
+
+3. **Provide context in error messages**
+   ```cpp
+   // Good
+   ERR_FMT(
+     DracErrorCode::IoError,
+     "Failed to read file '{}': {}",
+     path, strerror(errno)
+   );
+   
+   // Less helpful
+   ERR(DracErrorCode::IoError, "Read failed");
+   ```
+
+4. **Use TRY_VOID for void Results**
+   ```cpp
+   auto setup() -> Result<> {
+     TRY_VOID(initStep1());
+     TRY_VOID(initStep2());
+     return {};
+   }
+   ```
+
+## See also
+
+- [Type system](/api/utils/types) - `Result` and `Err` type aliases
+- [CacheManager](/api/utils/cache-manager) - Uses `Result` for error handling

@@ -1,0 +1,594 @@
+---
+title: BSD and Unix systems
+description: BSD variants (FreeBSD, OpenBSD, NetBSD, DragonFly) and other Unix systems (Haiku, SerenityOS)
+---
+
+Draconis++ supports multiple BSD variants and other Unix-like operating systems through platform-specific implementations.
+
+## Supported systems
+
+<CardGroup cols={3}>
+  <Card title="FreeBSD" icon="freebsd">
+    Full support with kenv and sysctl
+  </Card>
+  <Card title="OpenBSD" icon="openbsd">
+    Limited support
+  </Card>
+  <Card title="NetBSD" icon="netbsd">
+    Limited support
+  </Card>
+  <Card title="DragonFly BSD" icon="dragon">
+    Full support with kenv
+  </Card>
+  <Card title="Haiku OS" icon="terminal">
+    Native Haiku APIs
+  </Card>
+  <Card title="SerenityOS" icon="ghost">
+    Native SerenityOS APIs
+  </Card>
+</CardGroup>
+
+## BSD implementation
+
+The BSD implementation (`src/Lib/OS/BSD.cpp`) provides support for FreeBSD, OpenBSD, NetBSD, and DragonFly BSD.
+
+### Platform detection
+
+```cpp
+#if defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__)
+// BSD-specific code
+#endif
+```
+
+**Available macros:**
+- `__FreeBSD__`: FreeBSD
+- `__OpenBSD__`: OpenBSD (limited support)
+- `__NetBSD__`: NetBSD
+- `__DragonFly__`: DragonFly BSD
+
+### OS information
+
+BSD systems attempt to read `/etc/os-release` with fallback to `uname`:
+
+```cpp
+auto GetOperatingSystem(CacheManager& cache) -> Result<OSInfo> {
+  const char* path = "/etc/os-release";
+  String name, version, id;
+  
+  std::ifstream file(path);
+  if (file) {
+    String line;
+    while (std::getline(file, line)) {
+      if (line.starts_with("NAME="))
+        name = extractValue(line, "NAME=");
+      else if (line.starts_with("VERSION="))
+        version = extractValue(line, "VERSION=");
+      else if (line.starts_with("ID="))
+        id = extractValue(line, "ID=");
+    }
+    
+    if (!name.empty())
+      return OSInfo(name, version, id);
+  }
+  
+  // Fallback to uname
+  Result<String> sysName = os::unix_shared::GetSystemName();
+  if (sysName)
+    return OSInfo(*sysName, "", "");
+}
+```
+
+### Memory information
+
+```cpp
+auto GetMemInfo() -> Result<u64> {
+  u64 mem = 0;
+  usize size = sizeof(mem);
+  
+#ifdef __NetBSD__
+  sysctlbyname("hw.physmem64", &mem, &size, nullptr, 0);
+#else
+  sysctlbyname("hw.physmem", &mem, &size, nullptr, 0);
+#endif
+  
+  return mem;
+}
+```
+
+**Note:** NetBSD uses `hw.physmem64` instead of `hw.physmem`.
+
+### Host identification
+
+#### FreeBSD and DragonFly BSD
+
+Use `kenv` (kernel environment) to read SMBIOS data:
+
+```cpp
+#if defined(__FreeBSD__) || defined(__DragonFly__)
+Array<char, 256> buffer;
+i32 result = kenv(KENV_GET, "smbios.system.product", buffer.data(), buffer.size() - 1);
+
+if (result == -1) {
+  // Fallback to sysctl
+  usize size = buffer.size();
+  sysctlbyname("hw.model", buffer.data(), &size, nullptr, 0);
+  return String(buffer.data());
+}
+
+if (result > 0)
+  buffer[result] = '\0';
+
+return String(buffer.data());
+#endif
+```
+
+#### NetBSD
+
+Use `sysctl` to read DMI data:
+
+```cpp
+#ifdef __NetBSD__
+Array<char, 256> buffer;
+usize size = buffer.size();
+
+if (sysctlbyname("machdep.dmi.system-product", buffer.data(), &size, nullptr, 0) == -1)
+  ERR(InternalError, "sysctlbyname failed");
+
+buffer[std::min(size, buffer.size() - 1)] = '\0';
+return String(buffer.data());
+#endif
+```
+
+### Window manager detection
+
+```cpp
+auto GetWindowManager(CacheManager& cache) -> Result<String> {
+  if (!GetEnv("DISPLAY") && !GetEnv("WAYLAND_DISPLAY") && !GetEnv("XDG_SESSION_TYPE"))
+    ERR(NotFound, "Could not find a graphical session");
+  
+  if (Result<String> waylandResult = GetWaylandCompositor())
+    return *waylandResult;
+  
+  if (Result<String> x11Result = GetX11WindowManager())
+    return *x11Result;
+  
+  ERR(NotFound, "Could not detect window manager");
+}
+```
+
+### Wayland compositor detection (FreeBSD)
+
+```cpp
+#ifdef __FreeBSD__
+const wl::DisplayGuard display;
+if (!display)
+  ERR(NotFound, "Failed to connect to display");
+
+i32 fd = display.fd();
+
+// Get compositor PID via socket credentials
+struct xucred cred;
+socklen_t len = sizeof(cred);
+if (getsockopt(fd, SOL_SOCKET, LOCAL_PEERCRED, &cred, &len) == -1)
+  ERR(ApiUnavailable, "Failed to get socket credentials (LOCAL_PEERCRED)");
+
+pid_t peerPid = cred.cr_pid;
+
+// Get executable path
+String exeRealPath = TRY(GetPathByPid(peerPid));
+
+// Extract compositor name
+StringView compositorName = extractBasename(exeRealPath);
+
+// Handle NixOS wrappers
+if (compositorName.starts_with(".") && compositorName.ends_with("-wrapped"))
+  compositorName = compositorName.substr(1, compositorName.length() - 9);
+
+return String(compositorName);
+#endif
+```
+
+**FreeBSD-specific:** Uses `LOCAL_PEERCRED` (instead of Linux's `SO_PEERCRED`) and `xucred` structure.
+
+### Process path retrieval (FreeBSD)
+
+```cpp
+#ifdef __FreeBSD__
+auto GetPathByPid(pid_t pid) -> Result<String> {
+  Array<char, PATH_MAX> exePathBuf;
+  usize size = exePathBuf.size();
+  Array<i32, 4> mib;
+  
+  mib[0] = CTL_KERN;
+  mib[1] = KERN_PROC_ARGS;
+  mib[2] = pid;
+  mib[3] = KERN_PROC_PATHNAME;
+  
+  if (sysctl(mib.data(), 4, exePathBuf.data(), &size, nullptr, 0) == -1)
+    ERR_FMT(InternalError, "sysctl KERN_PROC_PATHNAME failed for pid {}", pid);
+  
+  if (size == 0 || exePathBuf[0] == '\0')
+    ERR_FMT(NotFound, "sysctl returned empty path for pid {}", pid);
+  
+  exePathBuf[std::min(size, exePathBuf.size() - 1)] = '\0';
+  return String(exePathBuf.data());
+}
+#endif
+```
+
+### X11 window manager detection
+
+```cpp
+#if DRAC_ENABLE_X11
+auto GetX11WindowManager() -> Result<String> {
+  using namespace xcb;
+  
+  const DisplayGuard conn;
+  if (!conn)
+    ERR(ApiUnavailable, "Failed to connect to X server");
+  
+  // Same implementation as Linux (see platforms/linux)
+  // Atoms: _NET_SUPPORTING_WM_CHECK, _NET_WM_NAME, UTF8_STRING
+  
+  return wmName;
+}
+#endif
+```
+
+### Desktop environment
+
+```cpp
+auto GetDesktopEnvironment(CacheManager& cache) -> Result<String> {
+  if (!GetEnv("DISPLAY") && !GetEnv("WAYLAND_DISPLAY") && !GetEnv("XDG_SESSION_TYPE"))
+    ERR(NotFound, "Could not find a graphical session");
+  
+  return GetEnv("XDG_CURRENT_DESKTOP")
+    .transform([](String desktop) -> String {
+      if (usize colon = desktop.find(':'); colon != String::npos)
+        desktop.resize(colon);
+      return desktop;
+    })
+    .or_else([](const DracError&) -> Result<String> {
+      return GetEnv("DESKTOP_SESSION");
+    });
+}
+```
+
+### Shell detection
+
+```cpp
+Result<String> shellPath = GetEnv("SHELL");
+if (!shellPath)
+  ERR(NotFound, "Could not find SHELL environment variable");
+
+constexpr Array<Pair<StringView, StringView>, 5> shellMap {{
+  { "bash", "Bash" },
+  { "zsh",  "Zsh" },
+  { "fish", "Fish" },
+  { "nu",   "Nushell" },
+  { "sh",   "SH" },
+}};
+
+for (const auto& [exe, name] : shellMap)
+  if (shellPath->contains(exe))
+    return String(name);
+
+return *shellPath;
+```
+
+### Kernel version
+
+```cpp
+return os::unix_shared::GetKernelRelease();
+```
+
+### Disk usage
+
+```cpp
+return os::unix_shared::GetRootDiskUsage();
+```
+
+## Haiku OS implementation
+
+The Haiku implementation (`src/Lib/OS/Haiku.cpp`) uses native Haiku APIs.
+
+### Platform detection
+
+```cpp
+#ifdef __HAIKU__
+// Haiku-specific code
+#endif
+```
+
+### OS version
+
+Reads version information from `/boot/system/lib/libbe.so`:
+
+```cpp
+BFile file;
+status_t status = file.SetTo("/boot/system/lib/libbe.so", B_READ_ONLY);
+if (status != B_OK)
+  ERR(InternalError, "Error opening /boot/system/lib/libbe.so");
+
+BAppFileInfo appInfo;
+status = appInfo.SetTo(&file);
+
+version_info versionInfo;
+status = appInfo.GetVersionInfo(&versionInfo, B_APP_VERSION_KIND);
+
+String versionShortString = versionInfo.short_info;
+return OSInfo("Haiku", versionShortString, "haiku");
+```
+
+### Memory information
+
+```cpp
+system_info sysinfo;
+status_t status = get_system_info(&sysinfo);
+if (status != B_OK)
+  ERR(InternalError, "get_system_info failed");
+
+u64 totalMem = static_cast<u64>(sysinfo.max_pages) * B_PAGE_SIZE;
+u64 usedMem = static_cast<u64>(sysinfo.used_pages) * B_PAGE_SIZE;
+
+return ResourceUsage(usedMem, totalMem);
+```
+
+### Window manager
+
+Haiku always returns `"app_server"` (the native display server).
+
+### Desktop environment
+
+Haiku always returns `"Haiku Desktop Environment"`.
+
+### Shell detection
+
+```cpp
+Result<String> shellPath = GetEnv("SHELL");
+if (!shellPath)
+  ERR(NotFound, "Could not find SHELL environment variable");
+
+constexpr Array<Pair<StringView, StringView>, 5> shellMap {{
+  { "bash", "Bash" },
+  { "zsh",  "Zsh" },
+  { "fish", "Fish" },
+  { "nu",   "Nushell" },
+  { "sh",   "SH" },
+}};
+
+for (const auto& [exe, name] : shellMap)
+  if (shellPath->contains(exe))
+    return String(name);
+
+return *shellPath;
+```
+
+### Host identification
+
+```cpp
+Array<char, HOST_NAME_MAX + 1> hostnameBuffer;
+if (gethostname(hostnameBuffer.data(), hostnameBuffer.size()) != 0)
+  ERR_FMT(ApiUnavailable, "gethostname() failed: {}", strerror(errno));
+
+hostnameBuffer[HOST_NAME_MAX] = '\0';
+return String(hostnameBuffer.data());
+```
+
+### Kernel version
+
+```cpp
+system_info sysinfo;
+status_t status = get_system_info(&sysinfo);
+if (status != B_OK)
+  ERR(InternalError, "get_system_info failed");
+
+return std::to_string(sysinfo.kernel_version);
+```
+
+### Disk usage
+
+Haiku uses `/boot` as the primary filesystem:
+
+```cpp
+return os::unix_shared::GetDiskUsageAt("/boot");
+```
+
+## SerenityOS implementation
+
+The SerenityOS implementation (`src/Lib/OS/Serenity.cpp`) uses native SerenityOS APIs.
+
+### Platform detection
+
+```cpp
+#ifdef __serenity__
+// SerenityOS-specific code
+#endif
+```
+
+### OS version
+
+```cpp
+Result<os::unix_shared::UnameInfo> unameInfo = os::unix_shared::GetUnameInfo();
+if (!unameInfo)
+  return Err(unameInfo.error());
+
+return OSInfo(unameInfo->sysname, unameInfo->release, "serenity");
+```
+
+### Memory information
+
+Reads `/sys/kernel/memstat` JSON file:
+
+```cpp
+struct MemStatData {
+  u64 physical_allocated = 0;
+  u64 physical_available = 0;
+  
+  struct glaze {
+    using T = MemStatData;
+    static constexpr auto value = glz::object(
+      "physical_allocated", &T::physical_allocated,
+      "physical_available", &T::physical_available
+    );
+  };
+};
+
+constexpr const char* path = "/sys/kernel/memstat";
+std::ifstream file(path);
+String buffer((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+MemStatData data;
+glz::error_ctx error_context = glz::read<glaze_opts>(data, buffer);
+
+if (error_context)
+  ERR_FMT(ParseError, "Failed to parse JSON: {}", glz::format_error(error_context, buffer));
+
+u64 totalMem = (data.physical_allocated + data.physical_available) * PAGE_SIZE;
+u64 usedMem = data.physical_allocated * PAGE_SIZE;
+
+return ResourceUsage(usedMem, totalMem);
+```
+
+**Note:** Uses the Glaze JSON library for parsing.
+
+### Window manager
+
+SerenityOS always returns `"WindowManager"` (the native window manager).
+
+### Desktop environment
+
+SerenityOS always returns `"SerenityOS Desktop"`.
+
+### Shell detection
+
+Reads from `/etc/passwd`:
+
+```cpp
+uid_t userId = getuid();
+passwd* pw = getpwuid(userId);
+
+if (!pw)
+  ERR_FMT(NotFound, "User ID {} not found in /etc/passwd", userId);
+
+if (!pw->pw_shell || *pw->pw_shell == '\0')
+  ERR_FMT(NotFound, "User shell entry is empty for user ID {}", userId);
+
+String shell = pw->pw_shell;
+
+// Remove /bin/ prefix
+if (shell.starts_with("/bin/"))
+  shell = shell.substr(5);
+
+return shell;
+```
+
+### Host identification
+
+```cpp
+Array<char, HOST_NAME_MAX> hostnameBuffer;
+if (gethostname(hostnameBuffer.data(), hostnameBuffer.size()) != 0)
+  ERR_FMT(ApiUnavailable, "gethostname() failed: {}", strerror(errno));
+
+return String(hostnameBuffer.data());
+```
+
+### Kernel version
+
+```cpp
+return os::unix_shared::GetKernelRelease();
+```
+
+### Disk usage
+
+```cpp
+return os::unix_shared::GetRootDiskUsage();
+```
+
+## Shared Unix utilities
+
+All BSD and Unix systems use shared implementations from `Unix.hpp`:
+
+### Disk usage
+
+```cpp
+auto GetDiskUsageAt(const char* path) -> Result<ResourceUsage> {
+  struct statvfs stat;
+  if (statvfs(path, &stat) == -1)
+    ERR_FMT(IoError, "statvfs('{}') failed", path);
+  
+  u64 blockSize = stat.f_frsize;
+  u64 totalBytes = stat.f_blocks * blockSize;
+  u64 freeBytes = stat.f_bfree * blockSize;
+  u64 usedBytes = totalBytes - freeBytes;
+  
+  return ResourceUsage(usedBytes, totalBytes);
+}
+```
+
+### Kernel version
+
+```cpp
+auto GetKernelRelease() -> Result<String> {
+  struct utsname uts;
+  if (uname(&uts) == -1)
+    ERR_FMT(InternalError, "uname() failed: {}", strerror(errno));
+  
+  if (std::strlen(uts.release) == 0)
+    ERR(ParseError, "uname() returned empty kernel release");
+  
+  return String(uts.release);
+}
+```
+
+### System name
+
+```cpp
+auto GetSystemName() -> Result<String> {
+  struct utsname uts;
+  if (uname(&uts) == -1)
+    ERR_FMT(InternalError, "uname() failed", strerror(errno));
+  
+  return String(uts.sysname);
+}
+```
+
+## Feature availability
+
+| Feature | FreeBSD | NetBSD | DragonFly | Haiku | SerenityOS |
+|---------|---------|--------|-----------|-------|------------|
+| Memory info | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Host info | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Shell detection | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Kernel version | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Disk usage | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Window manager | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Desktop environment | ✓ | ✓ | ✓ | ✓ | ✓ |
+| X11 support | ✓ | ✓ | ✓ | ✗ | ✗ |
+| Wayland support | ✓ | ✗ | ✗ | ✗ | ✗ |
+| CPU info | ✗ | ✗ | ✗ | ✗ | ✗ |
+| GPU info | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Network info | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Battery info | ✗ | ✗ | ✗ | ✗ | ✗ |
+
+## Implementation locations
+
+**BSD:**
+- File: `src/Lib/OS/BSD.cpp` (368 lines)
+- Namespace: `draconis::core::system`
+- Requirement: `__FreeBSD__`, `__DragonFly__`, or `__NetBSD__`
+
+**Haiku:**
+- File: `src/Lib/OS/Haiku.cpp` (146 lines)
+- Namespace: `draconis::core::system`
+- Requirement: `__HAIKU__`
+
+**SerenityOS:**
+- File: `src/Lib/OS/Serenity.cpp` (175 lines)
+- Namespace: `draconis::core::system`
+- Requirement: `__serenity__`
+
+**Shared utilities:**
+- File: `src/Lib/OS/Unix.hpp` (344 lines)
+- Namespace: `draconis::os::unix_shared`
+- Requirement: Not `_WIN32`

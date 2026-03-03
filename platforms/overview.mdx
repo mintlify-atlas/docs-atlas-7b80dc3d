@@ -1,0 +1,154 @@
+---
+title: Platform support
+description: Overview of all supported platforms and their implementation details
+---
+
+Draconis++ is designed to be cross-platform, with native implementations for Windows, macOS, Linux, BSD variants, and other Unix-like systems. Each platform has dedicated implementation files that leverage platform-specific APIs for optimal performance.
+
+## Supported platforms
+
+<CardGroup cols={2}>
+  <Card title="Windows" icon="windows" href="/platforms/windows">
+    Windows 10/11 with DirectX Graphics Infrastructure (DXGI) and Windows Registry support
+  </Card>
+  <Card title="macOS" icon="apple" href="/platforms/macos">
+    macOS 12+ with Core Foundation, IOKit, and Core Graphics frameworks
+  </Card>
+  <Card title="Linux" icon="linux" href="/platforms/linux">
+    Linux (glibc/musl) with XCB, Wayland, and sysfs support
+  </Card>
+  <Card title="BSD & Unix" icon="server" href="/platforms/bsd">
+    FreeBSD, OpenBSD, NetBSD, DragonFly BSD, Haiku, and SerenityOS
+  </Card>
+</CardGroup>
+
+## Platform detection
+
+The build system automatically detects the target platform and defines appropriate preprocessor macros:
+
+| Macro | Platform | Defined by |
+|-------|----------|------------|
+| `_WIN32` | Windows | Compiler |
+| `__linux__` | Linux | Compiler |
+| `__APPLE__` | macOS | Compiler |
+| `__FreeBSD__` | FreeBSD | Compiler |
+| `__OpenBSD__` | OpenBSD | Compiler |
+| `__NetBSD__` | NetBSD | Compiler |
+| `__DragonFly__` | DragonFly BSD | Compiler |
+| `__HAIKU__` | Haiku OS | Compiler |
+| `__serenity__` | SerenityOS | Compiler |
+
+## Architecture detection
+
+The build system also provides architecture-specific macros:
+
+| Macro | Architecture | Enabled when |
+|-------|--------------|---------------|
+| `DRAC_ARCH_X86_64` | x86-64 | `host_machine.cpu_family() == 'x86_64'` |
+| `DRAC_ARCH_X86` | x86 (32-bit) | `host_machine.cpu_family() == 'x86'` |
+| `DRAC_ARCH_AARCH64` | ARM64 | `host_machine.cpu_family() == 'aarch64'` |
+| `DRAC_ARCH_ARM` | ARM (32-bit) | `host_machine.cpu_family() == 'arm'` |
+| `DRAC_ARCH_64BIT` | Any 64-bit | `sizeof(void*) == 8` |
+
+## Implementation structure
+
+Platform-specific code is organized in `src/Lib/OS/`:
+
+```
+src/Lib/OS/
+├── Windows.cpp    # Windows implementation
+├── Linux.cpp      # Linux implementation
+├── macOS.cpp      # macOS implementation
+├── macOS/         # Objective-C++ bridge
+│   ├── Bridge.mm
+│   └── Bridge.hpp
+├── BSD.cpp        # BSD variants
+├── Haiku.cpp      # Haiku OS
+├── Serenity.cpp   # SerenityOS
+└── Unix.hpp       # Shared Unix utilities
+```
+
+## Shared Unix utilities
+
+All Unix-like platforms (Linux, macOS, BSD, Haiku, SerenityOS) share common implementations in `Unix.hpp`:
+
+- **Disk usage**: `statvfs` for filesystem statistics
+- **Kernel version**: `uname` for kernel release information
+- **Network interfaces**: `getifaddrs` for interface enumeration (where available)
+- **Uptime**: `sysinfo` on Linux, `sysctl` on BSD/macOS
+
+These shared utilities are implemented as inline functions in the `draconis::os::unix_shared` namespace to avoid code duplication.
+
+## Build configuration
+
+Platform support can be customized via Meson build options:
+
+| Option | Type | Default | Platforms | Description |
+|--------|------|---------|-----------|-------------|
+| `xcb` | feature | auto | Linux, BSD | X11 support via XCB |
+| `wayland` | feature | auto | Linux, BSD | Wayland compositor support |
+| `pugixml` | feature | auto | Linux | XBPS package manager support |
+| `use_linked_pci_ids` | boolean | false | Linux | Embed PCI IDs database |
+
+### Feature options
+
+Feature options accept three values:
+- `enabled`: Require the feature (build fails if unavailable)
+- `disabled`: Disable the feature
+- `auto` (default): Enable if dependencies are found
+
+## Platform-specific dependencies
+
+### Windows
+- **dwmapi**: Desktop Window Manager API
+- **windowsapp**: Windows Runtime
+- **setupapi**: Device setup API
+- **dxgi**: DirectX Graphics Infrastructure
+- **iphlpapi**: IP Helper API
+
+### macOS
+- **appleframeworks**: Core Foundation, IOKit, Core Graphics
+- **Objective-C++**: For macOS-specific APIs
+
+### Linux
+- **xcb** (optional): X11 window system support
+- **wayland-client** (optional): Wayland compositor support
+- **dbus-1** (optional): D-Bus system integration
+- **pugixml** (optional): XML parsing for XBPS
+
+### BSD
+- **xcb** (optional): X11 window system support
+- **wayland** (optional): Wayland on FreeBSD
+
+## Platform feature matrix
+
+| Feature | Windows | macOS | Linux | BSD | Haiku | SerenityOS |
+|---------|---------|-------|-------|-----|-------|------------|
+| CPU info | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| GPU info | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Memory info | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Disk usage | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Network info | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Display info | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Battery info | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Window manager | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Desktop environment | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Shell detection | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Package counting | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Windows implementation" href="/platforms/windows">
+    Learn about Windows-specific APIs and registry access
+  </Card>
+  <Card title="macOS implementation" href="/platforms/macos">
+    Explore macOS frameworks and sysctl usage
+  </Card>
+  <Card title="Linux implementation" href="/platforms/linux">
+    Understand sysfs, procfs, and display server detection
+  </Card>
+  <Card title="BSD & Unix systems" href="/platforms/bsd">
+    Discover BSD sysctl and kenv utilities
+  </Card>
+</CardGroup>

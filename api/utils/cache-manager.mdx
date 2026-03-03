@@ -1,0 +1,352 @@
+---
+title: CacheManager
+description: API reference for the CacheManager class that provides in-memory and persistent caching
+---
+
+## Overview
+
+The `CacheManager` class provides a flexible caching system with support for both in-memory and persistent storage. It uses binary encoding (BEVE) for efficient serialization and supports configurable TTL (time-to-live) and cache locations.
+
+**Namespace:** `draconis::utils::cache`
+
+**Header:** `<Drac++/Utils/CacheManager.hpp>`
+
+<Note>
+Caching is only available when `DRAC_ENABLE_CACHING` is enabled in your configuration.
+</Note>
+
+## CacheLocation enum
+
+Defines where cache data should be stored.
+
+```cpp
+enum class CacheLocation : types::u8
+```
+
+| Value | Description |
+|-------|-------------|
+| `InMemory` | Volatile, lost on app exit. Fastest. |
+| `TempDirectory` | Persists until next reboot or system cleanup. |
+| `Persistent` | Stored in a user-level cache directory (e.g., `~/.cache`). |
+
+## CachePolicy struct
+
+Defines cache behavior including location and expiration.
+
+```cpp
+struct CachePolicy {
+  CacheLocation location = CacheLocation::Persistent;
+  types::Option<seconds> ttl = days(1);
+}
+```
+
+### Fields
+
+<ParamField path="location" type="CacheLocation" default="CacheLocation::Persistent">
+  Where the cache should be stored
+</ParamField>
+
+<ParamField path="ttl" type="types::Option<seconds>" default="days(1)">
+  Time-to-live for cached entries. Use `types::None` for no expiration.
+</ParamField>
+
+### Static factory methods
+
+<ParamField path="inMemory()" type="static auto">
+  Creates a policy for in-memory caching with no expiration.
+  
+  ```cpp
+  static auto inMemory() -> CachePolicy
+  ```
+</ParamField>
+
+<ParamField path="neverExpire()" type="static auto">
+  Creates a policy for persistent caching with no expiration.
+  
+  ```cpp
+  static auto neverExpire() -> CachePolicy
+  ```
+</ParamField>
+
+<ParamField path="tempDirectory()" type="static auto">
+  Creates a policy for temporary directory caching with no expiration.
+  
+  ```cpp
+  static auto tempDirectory() -> CachePolicy
+  ```
+</ParamField>
+
+## CacheManager class
+
+### Static members
+
+<ParamField path="ignoreCache" type="static inline bool" default="false">
+  Global flag to bypass all caching logic at runtime.
+  
+  When set to `true`, `getOrSet()` will skip both reading from and writing to any cache and will directly invoke the provided fetcher each time. This makes it easy to offer a `--ignore-cache` CLI option.
+  
+  ```cpp
+  static inline bool ignoreCache = false;
+  ```
+</ParamField>
+
+### Static methods
+
+<ParamField path="getPersistentCacheDir()" type="static auto">
+  Get the persistent cache directory path for the current platform.
+  
+  ```cpp
+  static auto getPersistentCacheDir() -> fs::path
+  ```
+  
+  <ResponseField name="return" type="fs::path">
+    The path to the cache directory:
+    - Linux: `~/.cache/draconis++`
+    - macOS: `~/Library/Caches/draconis++`
+    - Windows: `%LOCALAPPDATA%/draconis++/cache`
+  </ResponseField>
+</ParamField>
+
+### Constructor
+
+```cpp
+CacheManager()
+```
+
+Creates a new CacheManager with default policy (persistent storage, 1-day TTL).
+
+### Methods
+
+#### setGlobalPolicy
+
+Sets the global cache policy for all operations.
+
+```cpp
+auto setGlobalPolicy(const CachePolicy& policy) -> types::Unit
+```
+
+<ParamField path="policy" type="const CachePolicy&">
+  The cache policy to apply globally
+</ParamField>
+
+#### getOrSet
+
+Retrieves a cached value or computes and caches it if not present.
+
+```cpp
+template <typename T>
+auto getOrSet(
+  const types::String& key,
+  types::Option<CachePolicy> overridePolicy,
+  types::Fn<types::Result<T>()> fetcher
+) -> types::Result<T>
+```
+
+<ParamField path="key" type="const types::String&" required>
+  Unique identifier for the cached entry
+</ParamField>
+
+<ParamField path="overridePolicy" type="types::Option<CachePolicy>">
+  Optional policy to override the global policy for this operation
+</ParamField>
+
+<ParamField path="fetcher" type="types::Fn<types::Result<T>()>" required>
+  Function to call if cache miss occurs. Should return `Result<T>`.
+</ParamField>
+
+<ResponseField name="return" type="types::Result<T>">
+  The cached or newly computed value, or an error from the fetcher
+</ResponseField>
+
+**Simplified overload:**
+
+```cpp
+template <typename T>
+auto getOrSet(
+  const types::String& key,
+  types::Fn<types::Result<T>()> fetcher
+) -> types::Result<T>
+```
+
+Uses the global cache policy.
+
+#### invalidate
+
+Removes a cached entry by key.
+
+```cpp
+auto invalidate(const types::String& key) -> types::Unit
+```
+
+<ParamField path="key" type="const types::String&" required>
+  Cache key to invalidate
+</ParamField>
+
+This erases the entry from the in-memory cache and removes any corresponding files in temporary and persistent cache locations.
+
+#### invalidateAll
+
+Removes all cached data (both in-memory and on-disk).
+
+```cpp
+auto invalidateAll(bool logRemovals = false) -> types::u8
+```
+
+<ParamField path="logRemovals" type="bool" default="false">
+  Whether to log each file removal
+</ParamField>
+
+<ResponseField name="return" type="types::u8">
+  Number of cache files removed
+</ResponseField>
+
+This clears the in-memory cache and removes all files from persistent and temporary cache directories while preserving the directory structure.
+
+## CacheEntry struct
+
+Internal structure for storing cached data with expiration.
+
+```cpp
+template <typename T>
+struct CacheEntry {
+  T data;
+  types::Option<types::u64> expires; // UNIX timestamp (seconds), None if no expiry
+}
+```
+
+<Note>
+This is an internal structure used by the caching system. You typically don't need to interact with it directly.
+</Note>
+
+## Example usage
+
+### Basic caching
+
+```cpp
+#include <Drac++/Utils/CacheManager.hpp>
+
+using namespace draconis::utils::cache;
+using namespace draconis::utils::types;
+
+CacheManager cache;
+
+auto fetchExpensiveData() -> Result<String> {
+  // Simulate expensive operation
+  return "expensive data";
+}
+
+// Get or compute value
+auto result = cache.getOrSet<String>(
+  "my_key",
+  []() -> Result<String> {
+    return fetchExpensiveData();
+  }
+);
+
+if (result) {
+  std::cout << "Data: " << *result << std::endl;
+}
+```
+
+### Custom cache policy
+
+```cpp
+CacheManager cache;
+
+// Set global policy: in-memory only
+cache.setGlobalPolicy(CachePolicy::inMemory());
+
+// Override policy for specific operation: persistent with 7-day TTL
+auto result = cache.getOrSet<Vec<String>>(
+  "long_lived_data",
+  CachePolicy{
+    .location = CacheLocation::Persistent,
+    .ttl = std::chrono::days(7)
+  },
+  []() -> Result<Vec<String>> {
+    return fetchLongLivedData();
+  }
+);
+```
+
+### Temporary cache
+
+```cpp
+CacheManager cache;
+
+// Cache in temp directory (persists until reboot)
+auto result = cache.getOrSet<u64>(
+  "temp_data",
+  CachePolicy::tempDirectory(),
+  []() -> Result<u64> {
+    return computeTempData();
+  }
+);
+```
+
+### Cache invalidation
+
+```cpp
+CacheManager cache;
+
+// Invalidate specific entry
+cache.invalidate("my_key");
+
+// Clear all cache
+types::u8 removedCount = cache.invalidateAll(true); // Log removals
+std::cout << "Removed " << removedCount << " cached files" << std::endl;
+```
+
+### Global cache bypass
+
+```cpp
+// Useful for --ignore-cache CLI flag
+CacheManager::ignoreCache = true;
+
+CacheManager cache;
+auto result = cache.getOrSet<String>(
+  "key",
+  []() -> Result<String> {
+    // This will always be called, cache is bypassed
+    return "fresh data";
+  }
+);
+
+CacheManager::ignoreCache = false; // Re-enable caching
+```
+
+### Cache with error handling
+
+```cpp
+CacheManager cache;
+
+auto result = cache.getOrSet<Data>(
+  "data_key",
+  []() -> Result<Data> {
+    auto data = fetchFromApi();
+    if (!data) {
+      return Err(DracError(
+        DracErrorCode::NetworkError,
+        "Failed to fetch data"
+      ));
+    }
+    return *data;
+  }
+);
+
+if (!result) {
+  std::cerr << "Error: " << result.error().message << std::endl;
+  return;
+}
+
+// Use the data
+processData(*result);
+```
+
+## Thread safety
+
+The `CacheManager` uses internal mutex locking to ensure thread-safe operations. All methods can be safely called from multiple threads concurrently.
+
+## Serialization
+
+The cache uses BEVE (Binary Efficient Value Encoding) from the [glaze](https://github.com/stephenberry/glaze) library for serialization. Types must be compatible with glaze serialization to be cacheable.

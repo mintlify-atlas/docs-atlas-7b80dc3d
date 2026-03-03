@@ -1,0 +1,440 @@
+---
+title: macOS platform
+description: macOS-specific implementation details using Apple frameworks
+---
+
+The macOS implementation (`src/Lib/OS/macOS.cpp` and `src/Lib/OS/macOS/Bridge.mm`) provides native system information retrieval using macOS frameworks including Core Foundation, IOKit, Core Graphics, and sysctl.
+
+## Platform detection
+
+macOS builds are detected via the `__APPLE__` preprocessor macro:
+
+```cpp
+#ifdef __APPLE__
+// macOS-specific code
+#endif
+```
+
+## Required dependencies
+
+The macOS implementation requires Apple frameworks:
+
+| Framework | Purpose | Required |
+|-----------|---------|----------|
+| `CoreFoundation` | Property lists, data types | Yes |
+| `CoreGraphics` | Display information | Yes |
+| `IOKit` | Hardware info, battery status | Yes |
+| Standard BSD | sysctl, getifaddrs, uname | Yes |
+
+Frameworks are linked via the `appleframeworks` dependency in Meson.
+
+## Objective-C++ bridge
+
+Some macOS APIs require Objective-C++. These are isolated in `src/Lib/OS/macOS/Bridge.mm`:
+
+```cpp
+// Bridge.hpp
+namespace macOS {
+  auto GetOSVersion() -> Result<OSInfo>;
+  auto GetGPUModel() -> Result<String>;
+}
+```
+
+**File extension:** `.mm` files are Objective-C++ sources
+
+## System information via sysctl
+
+macOS extensively uses `sysctl` and `sysctlbyname` for system information:
+
+### Memory information
+
+```cpp
+auto GetMemInfo(CacheManager&) -> Result<ResourceUsage> {
+  static mach_port_t hostPort = mach_host_self();
+  static vm_size_t pageSize = 0;
+  
+  if (pageSize == 0)
+    host_page_size(hostPort, &pageSize);
+  
+  u64 totalMem = 0;
+  usize size = sizeof(totalMem);
+  sysctlbyname("hw.memsize", &totalMem, &size, nullptr, 0);
+  
+  vm_statistics64_data_t vmStats;
+  mach_msg_type_number_t infoCount = sizeof(vmStats) / sizeof(natural_t);
+  host_statistics64(hostPort, HOST_VM_INFO64, (host_info64_t)&vmStats, &infoCount);
+  
+  u64 usedMem = (vmStats.active_count + vmStats.wire_count) * pageSize;
+  return ResourceUsage(usedMem, totalMem);
+}
+```
+
+**Key sysctl values:**
+- `hw.memsize`: Total physical memory
+- `hw.physicalcpu`: Physical CPU cores
+- `hw.logicalcpu`: Logical CPU cores (with SMT)
+- `hw.model`: Hardware model identifier
+- `kern.osrelease`: Darwin kernel version
+- `machdep.cpu.brand_string`: CPU model name
+
+### CPU information
+
+```cpp
+Array<char, 256> cpuModel;
+usize cpuModelLen = cpuModel.size();
+sysctlbyname("machdep.cpu.brand_string", cpuModel.data(), &cpuModelLen, nullptr, 0);
+return String(cpuModel.data());
+```
+
+### CPU core count
+
+```cpp
+u32 physicalCores = 0;
+u32 logicalCores = 0;
+usize size = sizeof(u32);
+
+sysctlbyname("hw.physicalcpu", &physicalCores, &size, nullptr, 0);
+sysctlbyname("hw.logicalcpu", &logicalCores, &size, nullptr, 0);
+
+return CPUCores(physicalCores, logicalCores);
+```
+
+### Kernel version
+
+```cpp
+Array<char, 256> kernelVersion;
+usize kernelVersionLen = kernelVersion.size();
+sysctlbyname("kern.osrelease", kernelVersion.data(), &kernelVersionLen, nullptr, 0);
+return String(kernelVersion.data());
+```
+
+## Hardware model detection
+
+The implementation includes a comprehensive hardware model database:
+
+```cpp
+Array<char, 256> hwModel;
+usize hwModelLen = hwModel.size();
+sysctlbyname("hw.model", hwModel.data(), &hwModelLen, nullptr, 0);
+
+static const std::map<StringView, StringView> MODEL_NAME_BY_HW_MODEL = {
+  // MacBook Pro
+  { "MacBookPro18,3", "MacBook Pro (14-inch, 2021)" },
+  { "MacBookPro18,1", "MacBook Pro (16-inch, 2021)" },
+  { "MacBookPro17,1", "MacBook Pro (13-inch, M1, 2020)" },
+  // Mac (Apple Silicon)
+  { "Mac16,1", "MacBook Pro (14-inch, 2024)" },
+  { "Mac15,13", "MacBook Air (15-inch, M3, 2024)" },
+  { "Mac14,2", "MacBook Air (M2, 2022)" },
+  // ... 100+ models
+};
+```
+
+**Model identifier format:**
+- `MacBookPro18,3`: Intel-era naming
+- `Mac16,1`: Apple Silicon naming (2021+)
+
+## Display information
+
+Display information is retrieved using Core Graphics:
+
+### Primary display
+
+```cpp
+CGDirectDisplayID displayID = CGMainDisplayID();
+
+usize width = CGDisplayPixelsWide(displayID);
+usize height = CGDisplayPixelsHigh(displayID);
+
+CGDisplayModeRef currentMode = CGDisplayCopyDisplayMode(displayID);
+f64 refreshRate = CGDisplayModeGetRefreshRate(currentMode);
+CGDisplayModeRelease(currentMode);
+
+return DisplayInfo(displayID, {width, height}, refreshRate, true);
+```
+
+### All displays
+
+```cpp
+u32 displayCount = 0;
+CGGetOnlineDisplayList(0, nullptr, &displayCount);
+
+Array<CGDirectDisplayID, 16> stackDisplayIDs;  // Stack allocation for ≤16 displays
+CGDirectDisplayID* displayIDs = stackDisplayIDs.data();
+Vec<CGDirectDisplayID> dynDisplayIDs;  // Heap fallback for >16 displays
+
+if (displayCount > 16) {
+  dynDisplayIDs.resize(displayCount);
+  displayIDs = dynDisplayIDs.data();
+}
+
+CGGetOnlineDisplayList(displayCount, displayIDs, &displayCount);
+```
+
+<Note>
+The implementation uses small buffer optimization: stack allocation for ≤16 displays, heap allocation for larger counts.
+</Note>
+
+## Window manager detection
+
+Window manager is detected by scanning running processes:
+
+```cpp
+constexpr Array<StringView, 5> knownWms = {
+  "yabai",
+  "chunkwm",
+  "amethyst",
+  "spectacle",
+  "rectangle",
+};
+
+Array<i32, 3> request = { CTL_KERN, KERN_PROC, KERN_PROC_ALL };
+usize len = 0;
+sysctl(request.data(), request.size(), nullptr, &len, nullptr, 0);
+
+Vec<char> buf(len);
+sysctl(request.data(), request.size(), buf.data(), &len, nullptr, 0);
+
+Span<const kinfo_proc> processes(reinterpret_cast<const kinfo_proc*>(buf.data()), len / sizeof(kinfo_proc));
+
+for (const auto& procInfo : processes) {
+  const char* procName = procInfo.kp_proc.p_comm;
+  for (const auto& wmName : knownWms) {
+    if (strncasecmp(procName, wmName.data(), wmName.size()) == 0)
+      return String(wmName);
+  }
+}
+
+return "Quartz";  // Default macOS compositor
+```
+
+## Shell detection
+
+Shell is detected from the `SHELL` environment variable:
+
+```cpp
+constexpr Array<Pair<StringView, StringView>, 8> shellMap {{
+  { "bash", "Bash" },
+  { "zsh",  "Zsh" },
+  { "ksh",  "KornShell" },
+  { "fish", "Fish" },
+  { "tcsh", "TCsh" },
+  { "csh",  "Csh" },
+  { "sh",   "Sh" },
+  { "nu",   "NuShell" },
+}};
+
+Result<String> shellPath = GetEnv("SHELL");
+for (const auto& [exe, name] : shellMap) {
+  if (shellPath->ends_with(exe))
+    return String(name);
+}
+```
+
+## Network interfaces
+
+Network interfaces are enumerated using `getifaddrs`:
+
+### Primary interface (via routing table)
+
+```cpp
+Array<i32, 6> mib = { CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_GATEWAY };
+usize len = 0;
+sysctl(mib.data(), mib.size(), nullptr, &len, nullptr, 0);
+
+Vec<char> buf(len);
+sysctl(mib.data(), mib.size(), buf.data(), &len, nullptr, 0);
+
+// Parse routing table to find default route
+u32 primaryIfIndex = 0;
+for (usize offset = 0; offset < len;) {
+  const auto* rtm = reinterpret_cast<const rt_msghdr*>(&buf[offset]);
+  const auto* saddr = reinterpret_cast<const sockaddr*>(rtm + 1);
+  
+  if (saddr->sa_family == AF_INET && rtm->rtm_addrs & RTA_DST) {
+    if (reinterpret_cast<const sockaddr_in*>(saddr)->sin_addr.s_addr == 0) {
+      primaryIfIndex = rtm->rtm_index;  // Found default route
+      break;
+    }
+  }
+  offset += rtm->rtm_msglen;
+}
+```
+
+### All interfaces
+
+```cpp
+ifaddrs* ifaddrList = nullptr;
+getifaddrs(&ifaddrList);
+
+std::map<String, NetworkInterface> interfaceMap;
+
+for (ifaddrs* ifa = ifaddrList; ifa != nullptr; ifa = ifa->ifa_next) {
+  auto& interface = interfaceMap[ifa->ifa_name];
+  interface.name = ifa->ifa_name;
+  interface.isUp = ifa->ifa_flags & IFF_UP;
+  interface.isLoopback = ifa->ifa_flags & IFF_LOOPBACK;
+  
+  if (ifa->ifa_addr->sa_family == AF_INET) {
+    Array<char, NI_MAXHOST> host;
+    getnameinfo(ifa->ifa_addr, sizeof(sockaddr_in), host.data(), host.size(), nullptr, 0, NI_NUMERICHOST);
+    interface.ipv4Address = String(host.data());
+  } else if (ifa->ifa_addr->sa_family == AF_LINK) {
+    auto* sdl = reinterpret_cast<sockaddr_dl*>(ifa->ifa_addr);
+    if (sdl->sdl_alen == 6) {
+      const u8* macPtr = reinterpret_cast<const u8*>(LLADDR(sdl));
+      interface.macAddress = std::format("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", ...);
+    }
+  }
+}
+
+freeifaddrs(ifaddrList);
+```
+
+## Battery information
+
+Battery status is retrieved using IOKit Power Sources API:
+
+```cpp
+CFTypeRef powerSourcesInfo = IOPSCopyPowerSourcesInfo();
+CFArrayRef powerSourcesList = static_cast<CFArrayRef>(powerSourcesInfo);
+CFIndex sourceCount = CFArrayGetCount(powerSourcesList);
+
+for (CFIndex i = 0; i < sourceCount; ++i) {
+  CFDictionaryRef sourceDesc = IOPSGetPowerSourceDescription(
+    powerSourcesInfo, 
+    CFArrayGetValueAtIndex(powerSourcesList, i)
+  );
+  
+  // Check if internal battery
+  const auto* type = static_cast<const CFStringRef>(CFDictionaryGetValue(sourceDesc, CFSTR(kIOPSTypeKey)));
+  if (CFStringCompare(type, CFSTR(kIOPSInternalBatteryType), 0) != kCFCompareEqualTo)
+    continue;
+  
+  u8 percentage = getNumericValue<u8>(sourceDesc, CFSTR(kIOPSCurrentCapacityKey)).value_or(0);
+  
+  CFTypeRef isChargingRef = CFDictionaryGetValue(sourceDesc, CFSTR(kIOPSIsChargingKey));
+  bool isCharging = false;
+  if (isChargingRef && CFGetTypeID(isChargingRef) == CFBooleanGetTypeID())
+    isCharging = CFBooleanGetValue(static_cast<CFBooleanRef>(isChargingRef));
+  
+  Battery::Status status = isCharging ? Charging : Discharging;
+  if (percentage == 100 && isCharging)
+    status = Full;
+  
+  Option<std::chrono::seconds> timeRemaining = None;
+  if (Option<i32> timeMinutes = getNumericValue<i32>(sourceDesc, CFSTR(kIOPSTimeToEmptyKey)))
+    timeRemaining = std::chrono::minutes(*timeMinutes);
+  
+  return Battery(status, percentage, timeRemaining);
+}
+
+CFRelease(powerSourcesInfo);
+```
+
+## Uptime
+
+Uptime is calculated from boot time:
+
+```cpp
+Array<i32, 2> mib = { CTL_KERN, KERN_BOOTTIME };
+struct timeval boottime;
+usize len = sizeof(boottime);
+
+sysctl(mib.data(), mib.size(), &boottime, &len, nullptr, 0);
+
+auto bootTimepoint = std::chrono::system_clock::from_time_t(boottime.tv_sec);
+auto now = std::chrono::system_clock::now();
+
+return std::chrono::duration_cast<std::chrono::seconds>(now - bootTimepoint);
+```
+
+## Desktop environment
+
+macOS always returns `"Aqua"` (the native desktop environment).
+
+## OS version (Objective-C++ bridge)
+
+The OS version is retrieved via Objective-C++ in `Bridge.mm`:
+
+```objc
+auto GetOSVersion() -> Result<OSInfo> {
+  @autoreleasepool {
+    NSProcessInfo* processInfo = [NSProcessInfo processInfo];
+    NSOperatingSystemVersion version = [processInfo operatingSystemVersion];
+    
+    String versionString = std::format("{}.{}.{}", 
+      version.majorVersion,
+      version.minorVersion,
+      version.patchVersion
+    );
+    
+    return OSInfo("macOS", versionString, "macos");
+  }
+}
+```
+
+## GPU information (Objective-C++ bridge)
+
+GPU model is retrieved using Metal framework:
+
+```objc
+auto GetGPUModel() -> Result<String> {
+  @autoreleasepool {
+    NSArray<id<MTLDevice>>* devices = MTLCopyAllDevices();
+    if (devices.count == 0)
+      return Err(DracError(UnavailableFeature, "No Metal devices found"));
+    
+    id<MTLDevice> device = devices[0];
+    NSString* name = [device name];
+    return String([name UTF8String]);
+  }
+}
+```
+
+## Package managers
+
+The macOS implementation supports:
+
+### Homebrew
+
+Counts packages in Homebrew Cellar directories:
+
+```cpp
+Array<fs::path, 2> cellarPaths {
+  "/opt/homebrew/Cellar",  // Apple Silicon
+  "/usr/local/Cellar",     // Intel
+};
+```
+
+### MacPorts
+
+Counts installed packages from SQLite database:
+
+```cpp
+GetCountFromDb(
+  cache,
+  "macports",
+  "/opt/local/var/macports/registry/registry.db",
+  "SELECT COUNT(*) FROM ports WHERE state='installed';"
+);
+```
+
+## Performance optimizations
+
+1. **Mach port caching**: `mach_host_self()` result is cached statically
+2. **Page size caching**: Page size is queried once and reused
+3. **Small buffer optimization**: Stack allocation for common cases (≤16 displays, 4KB routing table)
+4. **Process list caching**: Process enumeration is cached
+5. **sysctl caching**: Hardware info is cached with `neverExpire()` policy
+
+## Implementation location
+
+**Files:**
+- `src/Lib/OS/macOS.cpp` (800 lines)
+- `src/Lib/OS/macOS/Bridge.mm` (Objective-C++ bridge)
+- `src/Lib/OS/macOS/Bridge.hpp` (Bridge interface)
+
+**Namespace:** `draconis::core::system`
+
+**Build requirement:** Requires `__APPLE__` macro and `appleframeworks` dependency

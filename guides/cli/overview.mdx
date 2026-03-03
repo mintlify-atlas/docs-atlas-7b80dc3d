@@ -1,0 +1,128 @@
+---
+title: "CLI tool overview"
+description: "Introduction to the Draconis++ command-line interface"
+---
+
+Draconis++ is a powerful system information tool that displays detailed information about your computer's hardware, software, and environment in a beautiful, customizable format.
+
+## What is Draconis++?
+
+Draconis++ is a modern system fetch tool written in C++ that provides:
+
+- **Comprehensive system information** - Display CPU, GPU, RAM, disk, OS, kernel, and more
+- **Beautiful ASCII art** - Customizable logos with support for inline images
+- **Multiple output formats** - JSON, compact templates, and plugin-based formats
+- **Extensible plugin system** - Add custom data sources and output formats
+- **High performance** - Fast execution with intelligent caching
+- **Cross-platform** - Works on Linux, macOS, and Windows
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Rich information display" icon="display">
+    Shows detailed system metrics including hardware specs, software versions, desktop environment, and currently playing media.
+  </Card>
+  
+  <Card title="Flexible configuration" icon="sliders">
+    Configure via TOML files or precompiled C++ headers for maximum portability.
+  </Card>
+  
+  <Card title="Custom logos" icon="image">
+    Display custom images using Kitty or iTerm2 protocols, or use traditional ASCII art.
+  </Card>
+  
+  <Card title="Developer tools" icon="code">
+    Built-in benchmarking, doctor mode for diagnostics, and JSON output for scripting.
+  </Card>
+</CardGroup>
+
+## Quick start
+
+<Steps>
+  <Step title="Build the project">
+    Use the Just build system to compile Draconis++:
+    
+    ```bash
+    just setup
+    just build
+    ```
+  </Step>
+  
+  <Step title="Run the tool">
+    Execute the binary to see your system information:
+    
+    ```bash
+    just run
+    ```
+    
+    Or run the binary directly:
+    
+    ```bash
+    ./build/src/CLI/draconis++
+    ```
+  </Step>
+  
+  <Step title="Customize the output">
+    Create a configuration file or use command-line flags to customize the display:
+    
+    ```bash
+    draconis++ --no-ascii
+    draconis++ --json --pretty
+    draconis++ --compact "{host} | {cpu} | {ram}"
+    ```
+  </Step>
+</Steps>
+
+## Common use cases
+
+### Display system information
+
+The most basic usage displays your system information with ASCII art:
+
+```bash
+draconis++
+```
+
+### Diagnose issues
+
+Use doctor mode to identify failed data sources:
+
+```bash
+draconis++ --doctor
+```
+
+### Export as JSON
+
+Get machine-readable output for scripts and automation:
+
+```bash
+draconis++ --json --pretty > system-info.json
+```
+
+### Benchmark performance
+
+Measure timing for each data source:
+
+```bash
+draconis++ --benchmark
+```
+
+### Custom compact output
+
+Create single-line output with template strings:
+
+```bash
+draconis++ --compact "{host} running {os} | {cpu} | {ram}"
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Command reference" icon="terminal" href="/guides/cli/usage">
+    Complete reference for all CLI flags and options.
+  </Card>
+  
+  <Card title="Customization" icon="paintbrush" href="/guides/cli/customization">
+    Learn how to configure Draconis++ with TOML files and custom logos.
+  </Card>
+</CardGroup>

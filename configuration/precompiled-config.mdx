@@ -1,0 +1,394 @@
+---
+title: Precompiled configuration
+description: Configure Draconis++ at compile time for maximum performance and portability
+---
+
+The precompiled configuration system allows you to embed all configuration directly into the binary at compile time, eliminating runtime TOML parsing and external config files.
+
+## Overview
+
+When enabled with `-Dprecompiled_config=true`, Draconis++ reads configuration from a `config.hpp` file instead of parsing `config.toml` at runtime. This provides:
+
+- **Zero runtime overhead** - No TOML parsing or file I/O
+- **Maximum portability** - Single binary with no external config files
+- **Compile-time validation** - Configuration errors caught at build time
+- **Static plugins** - Plugins compiled directly into the binary
+
+<Warning>
+  When `precompiled_config=true`, you must provide a `config.hpp` file at the project root, or the build will fail.
+</Warning>
+
+## Getting started
+
+### Step 1: Copy the example config
+
+```bash
+# Copy the example to config.hpp
+cp config.example.hpp config.hpp
+```
+
+### Step 2: Edit your configuration
+
+Open `config.hpp` and customize the settings:
+
+```cpp config.hpp
+#pragma once
+
+#if DRAC_PRECOMPILED_CONFIG
+
+#include <Drac++/Config/PrecompiledLayout.hpp>
+
+namespace draconis::config {
+  // Your username for the greeting
+  constexpr const char* DRAC_USERNAME = "YourName";
+
+  // More config options below...
+}
+
+#endif
+```
+
+### Step 3: Build with precompiled config
+
+```bash
+meson setup build -Dprecompiled_config=true
+meson compile -C build
+```
+
+## Configuration options
+
+### Username
+
+Set the display name for the greeting message:
+
+```cpp
+namespace draconis::config {
+  constexpr const char* DRAC_USERNAME = "User";
+}
+```
+
+### Logo configuration
+
+Configure inline image rendering for supported terminal protocols:
+
+<Tabs>
+  <Tab title="No logo (ASCII art)">
+    ```cpp
+    inline constexpr PrecompiledLogo DRAC_LOGO = {};
+    ```
+  </Tab>
+
+  <Tab title="Kitty protocol">
+    ```cpp
+    inline constexpr PrecompiledLogo DRAC_LOGO = {
+      .path     = "/path/to/logo.png",
+      .protocol = "kitty",
+      .width    = 200,  // pixels
+      .height   = 0,    // 0 = auto from aspect ratio
+    };
+    ```
+  </Tab>
+
+  <Tab title="iTerm2 protocol">
+    ```cpp
+    inline constexpr PrecompiledLogo DRAC_LOGO = {
+      .path     = "/path/to/logo.png",
+      .protocol = "iterm2",
+      .width    = 200,
+      .height   = 200,
+    };
+    ```
+  </Tab>
+</Tabs>
+
+**Supported protocols:**
+- `kitty` - Kitty graphics protocol
+- `kitty-direct` - Kitty direct rendering
+- `iterm2` - iTerm2 inline images
+
+<Note>
+  Set `path` to `nullptr` to disable inline logo rendering and use ASCII art instead.
+</Note>
+
+### Package managers
+
+<Note>
+  Only available when `packagecount` feature is enabled (`-Dpackagecount=enabled`).
+</Note>
+
+Configure which package managers to display using a bitmask:
+
+```cpp
+#if DRAC_ENABLE_PACKAGECOUNT
+#include <Drac++/Services/Packages.hpp>
+
+namespace draconis::config {
+  using services::packages::Manager;
+
+  // Enable multiple package managers with bitwise OR
+  constexpr Manager DRAC_ENABLED_PACKAGE_MANAGERS = 
+    Manager::Cargo | Manager::Pacman | Manager::Nix;
+}
+#endif
+```
+
+**Available package managers by platform:**
+
+<Tabs>
+  <Tab title="Linux">
+    - `Manager::Apk` - Alpine Package Keeper
+    - `Manager::Cargo` - Rust package manager
+    - `Manager::Dpkg` - Debian packages
+    - `Manager::Moss` - Serpent OS
+    - `Manager::Nix` - Nix package manager
+    - `Manager::Pacman` - Arch Linux
+    - `Manager::Rpm` - Red Hat packages
+    - `Manager::Xbps` - Void Linux
+  </Tab>
+
+  <Tab title="macOS">
+    - `Manager::Cargo` - Rust package manager
+    - `Manager::Homebrew` - Homebrew
+    - `Manager::Macports` - MacPorts
+    - `Manager::Nix` - Nix package manager
+  </Tab>
+
+  <Tab title="Windows">
+    - `Manager::Cargo` - Rust package manager
+    - `Manager::Chocolatey` - Chocolatey
+    - `Manager::Scoop` - Scoop
+    - `Manager::Winget` - Windows Package Manager
+  </Tab>
+
+  <Tab title="BSD">
+    - `Manager::Cargo` - Rust package manager
+    - `Manager::Nix` - Nix package manager
+    - `Manager::PkgNg` - FreeBSD/DragonFly BSD
+    - `Manager::PkgSrc` - NetBSD pkgsrc
+  </Tab>
+</Tabs>
+
+## UI layout
+
+The UI is organized into groups containing rows that display system information.
+
+### Layout structure
+
+```cpp
+// 1. Define row arrays as inline constexpr variables
+inline constexpr std::array<PrecompiledLayoutRow, 3> DRAC_UI_SYSTEM_ROWS = {
+  Row("host"),
+  Row("os"),
+  Row("kernel"),
+};
+
+// 2. Combine groups into the final layout
+inline constexpr std::array<PrecompiledLayoutGroup, 1> DRAC_UI_LAYOUT = {
+  Group("system", DRAC_UI_SYSTEM_ROWS),
+};
+```
+
+<Warning>
+  Row arrays **must** be declared as separate `inline constexpr` variables. Inline temporaries will cause dangling pointers because `PrecompiledLayoutGroup` uses `std::span` internally.
+</Warning>
+
+### Row helper function
+
+```cpp
+Row(key, autoWrap = false, color = LogColor::White, label = nullptr, icon = nullptr)
+```
+
+**Parameters:**
+- `key` - Data key identifying what to display (required)
+- `autoWrap` - Enable automatic word wrapping (default: false)
+- `color` - Value foreground color (default: White)
+- `label` - Custom label override (default: nullptr = use default)
+- `icon` - Custom icon override (default: nullptr = use default)
+
+### Built-in data keys
+
+| Key | Description |
+|-----|-------------|
+| `date` | Current date and time |
+| `host` | Hostname and model |
+| `os` | Operating system name |
+| `kernel` | Kernel version |
+| `cpu` | CPU model and info |
+| `gpu` | GPU model and driver |
+| `ram` | Memory usage |
+| `disk` | Disk usage |
+| `uptime` | System uptime |
+| `shell` | Current shell |
+| `packages` | Package counts |
+| `de` | Desktop environment |
+| `wm` | Window manager |
+| `playing` | Now playing (media) |
+
+**Plugin keys** use the format `plugin.<name>` (e.g., `plugin.weather`).
+
+### Customizing rows
+
+<CodeGroup>
+```cpp Default row
+// Uses default label and icon
+Row("cpu")
+```
+
+```cpp Custom label
+// Override the label only
+Row("cpu", false, LogColor::White, "Processor")
+```
+
+```cpp Custom icon and label
+// Override both icon and label
+Row("cpu", false, LogColor::White, "Processor", "  ")
+```
+
+```cpp Word wrapping
+// Enable auto-wrap for long values
+Row("plugin.weather", true, LogColor::Cyan)
+```
+
+```cpp Colored output
+// Use different color for the value
+Row("gpu", false, LogColor::Green)
+```
+</CodeGroup>
+
+### Complete example
+
+```cpp config.hpp
+#pragma once
+
+#if DRAC_PRECOMPILED_CONFIG
+
+#include <array>
+#include <Drac++/Config/PrecompiledLayout.hpp>
+
+#if DRAC_ENABLE_PACKAGECOUNT
+#include <Drac++/Services/Packages.hpp>
+#endif
+
+namespace draconis::config {
+  using utils::logging::LogColor;
+
+  constexpr const char* DRAC_USERNAME = "MyUser";
+
+  inline constexpr PrecompiledLogo DRAC_LOGO = {
+    .path     = "/home/user/.config/draconis++/logo.png",
+    .protocol = "kitty",
+    .width    = 200,
+  };
+
+  #if DRAC_ENABLE_PACKAGECOUNT
+  constexpr services::packages::Manager DRAC_ENABLED_PACKAGE_MANAGERS = 
+    services::packages::Manager::Pacman | 
+    services::packages::Manager::Cargo;
+  #endif
+
+  // Intro section
+  inline constexpr std::array<PrecompiledLayoutRow, 2> DRAC_UI_INTRO_ROWS = {
+    Row("date"),
+    Row("plugin.weather", true, LogColor::Cyan),
+  };
+
+  // System info
+  inline constexpr std::array<PrecompiledLayoutRow, 3> DRAC_UI_SYSTEM_ROWS = {
+    Row("host"),
+    Row("os"),
+    Row("kernel"),
+  };
+
+  // Hardware info
+  inline constexpr std::array<PrecompiledLayoutRow, 5> DRAC_UI_HARDWARE_ROWS = {
+    Row("cpu"),
+    Row("gpu"),
+    Row("ram", false, LogColor::Yellow),
+    Row("disk", false, LogColor::Yellow),
+    Row("uptime"),
+  };
+
+  // Final layout
+  inline constexpr std::array<PrecompiledLayoutGroup, 3> DRAC_UI_LAYOUT = {
+    Group("intro", DRAC_UI_INTRO_ROWS),
+    Group("system", DRAC_UI_SYSTEM_ROWS),
+    Group("hardware", DRAC_UI_HARDWARE_ROWS),
+  };
+}
+
+#endif // DRAC_PRECOMPILED_CONFIG
+```
+
+## Static plugins
+
+When combining `precompiled_config` with static plugins, plugin configuration goes in `config.hpp`:
+
+```cpp config.hpp
+// Only include plugin headers you're actually using!
+#include "plugins/weather/WeatherConfig.hpp"
+
+namespace draconis::config {
+  // Weather plugin config (only needed with -Dstatic_plugins=weather)
+  inline constexpr auto WEATHER_CONFIG = weather::config::MakeConfig(
+    weather::config::Provider::OpenMeteo,
+    weather::config::Units::Metric,
+    weather::config::Coordinates { 40.7128, -74.0060 } // New York
+  );
+}
+```
+
+Build with static plugins:
+
+```bash
+meson setup build \
+  -Dprecompiled_config=true \
+  -Dstatic_plugins=['weather']
+```
+
+<Note>
+  When `precompiled_config=true`, plugins are **only enabled** if `static_plugins` is non-empty. The `plugins` option is ignored in this mode.
+</Note>
+
+## Color options
+
+Available `LogColor` values for row customization:
+
+<Tabs>
+  <Tab title="Basic colors">
+    - `LogColor::White`
+    - `LogColor::Black`
+    - `LogColor::Red`
+    - `LogColor::Green`
+    - `LogColor::Yellow`
+    - `LogColor::Blue`
+    - `LogColor::Magenta`
+    - `LogColor::Cyan`
+  </Tab>
+
+  <Tab title="Bright colors">
+    - `LogColor::BrightRed`
+    - `LogColor::BrightGreen`
+    - `LogColor::BrightYellow`
+    - `LogColor::BrightBlue`
+    - `LogColor::BrightMagenta`
+    - `LogColor::BrightCyan`
+    - `LogColor::BrightWhite`
+  </Tab>
+</Tabs>
+
+## Advantages vs runtime config
+
+| Feature | Precompiled | Runtime TOML |
+|---------|-------------|-------------|
+| **Configuration file** | `config.hpp` | `config.toml` |
+| **Parsing overhead** | None | TOML parser at startup |
+| **Validation** | Compile-time | Runtime |
+| **File I/O** | None | Reads config file |
+| **Plugin loading** | Static linking | Dynamic loading |
+| **Portability** | Single binary | Requires config file |
+| **Flexibility** | Rebuild to change | Edit config anytime |
+| **Binary size** | Larger (plugins embedded) | Smaller |
+
+<Tip>
+  Use precompiled config for deployment and distribution. Use runtime config for development and customization.
+</Tip>

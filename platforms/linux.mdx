@@ -1,0 +1,714 @@
+---
+title: Linux platform
+description: Linux-specific implementation details using sysfs, procfs, and display servers
+---
+
+The Linux implementation (`src/Lib/OS/Linux.cpp`) provides native system information retrieval using sysfs, procfs, CPUID instructions, and display server protocols (X11/Wayland).
+
+## Platform detection
+
+Linux builds are detected via the `__linux__` preprocessor macro:
+
+```cpp
+#ifdef __linux__
+// Linux-specific code
+#endif
+```
+
+## Optional dependencies
+
+The Linux implementation supports optional features:
+
+| Dependency | Purpose | Feature flag | Build option |
+|------------|---------|--------------|---------------|
+| `xcb` | X11 window system support | `DRAC_USE_XCB` | `xcb=auto` |
+| `wayland-client` | Wayland compositor support | `DRAC_USE_WAYLAND` | `wayland=auto` |
+| `dbus-1` | D-Bus integration | — | auto-detected |
+| `pugixml` | XBPS package manager | `DRAC_USE_PUGIXML` | `pugixml=auto` |
+
+<Note>
+Feature flags are automatically defined when dependencies are found. Set build options to `enabled` to require them or `disabled` to exclude them.
+</Note>
+
+## PCI IDs database
+
+For GPU identification, the implementation uses the PCI IDs database:
+
+### Linked database (embedded)
+
+```cpp
+#if DRAC_USE_LINKED_PCI_IDS
+extern "C" {
+  extern const char _binary_pci_ids_start[];
+  extern const char _binary_pci_ids_end[];
+}
+
+auto LookupPciNames(StringView vendorId, StringView deviceId) -> Result<Pair<String, String>> {
+  const usize pciIdsLen = _binary_pci_ids_end - _binary_pci_ids_start;
+  return LookupPciNamesFromBuffer(StringView(_binary_pci_ids_start, pciIdsLen), vendorId, deviceId);
+}
+#endif
+```
+
+**Build option:** `use_linked_pci_ids=true`
+
+### System database (default)
+
+```cpp
+Array<fs::path, 3> knownPaths = {
+  "/usr/share/hwdata/pci.ids",
+  "/usr/share/misc/pci.ids",
+  "/usr/share/pci.ids"
+};
+```
+
+The implementation uses `mmap` for efficient reading:
+
+```cpp
+i32 fd = open(pciIdsPath.c_str(), O_RDONLY | O_CLOEXEC);
+struct stat statbuf;
+fstat(fd, &statbuf);
+
+void* mapped = mmap(nullptr, statbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+Result<Pair<String, String>> result = LookupPciNamesFromBuffer(
+  StringView(static_cast<const char*>(mapped), statbuf.st_size),
+  vendorId,
+  deviceId
+);
+munmap(mapped, statbuf.st_size);
+```
+
+## System information via sysfs
+
+sysfs provides hardware information through virtual files:
+
+### Reading sysfs files
+
+```cpp
+auto ReadSysFile(const fs::path& path) -> Result<String> {
+  std::ifstream file(path);
+  if (!file.is_open())
+    ERR_FMT(NotFound, "Failed to open sysfs file: {}", path.string());
+  
+  String line;
+  if (std::getline(file, line)) {
+    // Trim trailing whitespace
+    if (const usize pos = line.find_last_not_of(" \t\n\r"); pos != String::npos)
+      line.erase(pos + 1);
+    return line;
+  }
+  
+  ERR_FMT(IoError, "Failed to read from sysfs file: {}", path.string());
+}
+```
+
+### GPU detection
+
+```cpp
+const fs::path pciPath = "/sys/bus/pci/devices";
+
+for (const auto& entry : fs::directory_iterator(pciPath)) {
+  // Read PCI class (0x03xxxx = display controller)
+  Result<String> classId = ReadSysFile(entry.path() / "class");
+  if (!classId || !classId->starts_with("0x03"))
+    continue;
+  
+  Result<String> vendorId = ReadSysFile(entry.path() / "vendor");
+  Result<String> deviceId = ReadSysFile(entry.path() / "device");
+  
+  if (vendorId && deviceId) {
+    if (Result<Pair<String, String>> pciNames = LookupPciNames(*vendorId, *deviceId))
+      return CleanGpuModelName(pciNames->first, pciNames->second);
+  }
+}
+```
+
+**Common sysfs paths:**
+- `/sys/bus/pci/devices/*/class`: PCI device class
+- `/sys/bus/pci/devices/*/vendor`: PCI vendor ID
+- `/sys/bus/pci/devices/*/device`: PCI device ID
+- `/sys/class/dmi/id/product_family`: System product family
+- `/sys/class/dmi/id/product_name`: System product name
+- `/sys/class/power_supply/*/type`: Power supply type
+- `/sys/class/power_supply/*/capacity`: Battery percentage
+- `/sys/class/power_supply/*/status`: Battery status
+
+### Host identification
+
+```cpp
+constexpr const char* primaryPath = "/sys/class/dmi/id/product_family";
+constexpr const char* fallbackPath = "/sys/class/dmi/id/product_name";
+
+std::ifstream file(primaryPath);
+String line;
+
+if (file.is_open() && std::getline(file, line) && !line.empty())
+  return line;
+
+// Fallback to product_name
+file = std::ifstream(fallbackPath);
+if (file.is_open() && std::getline(file, line) && !line.empty())
+  return line;
+```
+
+## OS information via /etc/os-release
+
+```cpp
+std::ifstream file("/etc/os-release");
+String osName, osVersion, osId;
+String line;
+
+while (std::getline(file, line)) {
+  if (line.starts_with("NAME=")) {
+    osName = line.substr(5);
+    // Remove quotes
+    if (osName.front() == '"' && osName.back() == '"')
+      osName = osName.substr(1, osName.length() - 2);
+  }
+  else if (line.starts_with("VERSION="))
+    osVersion = line.substr(8);
+  else if (line.starts_with("ID="))
+    osId = line.substr(3);
+}
+
+return OSInfo(osName, osVersion, osId);
+```
+
+**Parsed fields:**
+- `NAME`: Distribution name (e.g., "Arch Linux")
+- `VERSION` or `VERSION_ID`: Version number
+- `ID`: Distribution identifier (e.g., "arch")
+
+## CPU information via CPUID
+
+### CPU brand string
+
+```cpp
+Array<u32, 4> cpuInfo;
+Array<char, 49> brandString = { 0 };
+
+__get_cpuid(0x80000000, cpuInfo.data(), &cpuInfo[1], &cpuInfo[2], &cpuInfo[3]);
+u32 maxFunction = cpuInfo[0];
+
+if (maxFunction < 0x80000004)
+  ERR(NotSupported, "CPU does not support brand string");
+
+for (u32 i = 0; i < 3; ++i) {
+  __get_cpuid(0x80000002 + i, cpuInfo.data(), &cpuInfo[1], &cpuInfo[2], &cpuInfo[3]);
+  std::memcpy(&brandString[i * 16], cpuInfo.data(), sizeof(cpuInfo));
+}
+
+String result(brandString.data());
+result.erase(result.find_last_not_of(" \t\n\r") + 1);
+return result;
+```
+
+### CPU core count
+
+```cpp
+u32 eax, ebx, ecx, edx;
+__get_cpuid(0x0, &eax, &ebx, &ecx, &edx);
+u32 maxLeaf = eax;
+u32 vendorEbx = ebx;
+
+u32 logicalCores = 0;
+u32 physicalCores = 0;
+
+if (maxLeaf >= 0xB) {
+  // Use topology enumeration leaf (0xB)
+  u32 threadsPerCore = 0;
+  for (u32 subleaf = 0;; ++subleaf) {
+    __get_cpuid_count(0xB, subleaf, &eax, &ebx, &ecx, &edx);
+    if (ebx == 0) break;
+    
+    u32 levelType = (ecx >> 8) & 0xFF;
+    u32 processorsAtLevel = ebx & 0xFFFF;
+    
+    if (levelType == 1)  // SMT level
+      threadsPerCore = processorsAtLevel;
+    if (levelType == 2)  // Core level
+      logicalCores = processorsAtLevel;
+  }
+  
+  if (logicalCores > 0 && threadsPerCore > 0)
+    physicalCores = logicalCores / threadsPerCore;
+}
+```
+
+**Fallback for older CPUs:**
+```cpp
+if (physicalCores == 0) {
+  __get_cpuid(0x1, &eax, &ebx, &ecx, &edx);
+  logicalCores = (ebx >> 16) & 0xFF;
+  bool hasHyperthreading = (edx & (1 << 28)) != 0;
+  
+  if (hasHyperthreading) {
+    if (vendorEbx == 0x756e6547) {  // Intel
+      __get_cpuid_count(0x4, 0, &eax, &ebx, &ecx, &edx);
+      physicalCores = ((eax >> 26) & 0x3F) + 1;
+    } else if (vendorEbx == 0x68747541) {  // AMD
+      __get_cpuid(0x80000008, &eax, &ebx, &ecx, &edx);
+      physicalCores = (ecx & 0xFF) + 1;
+    }
+  }
+}
+```
+
+## Memory information via sysinfo
+
+```cpp
+struct sysinfo info;
+if (sysinfo(&info) != 0)
+  ERR(ApiUnavailable, "sysinfo call failed");
+
+if (info.mem_unit == 0)
+  ERR(PlatformSpecific, "sysinfo.mem_unit is 0");
+
+u64 totalMem = info.totalram * info.mem_unit;
+u64 usedMem = (info.totalram - info.freeram - info.bufferram) * info.mem_unit;
+
+return ResourceUsage(usedMem, totalMem);
+```
+
+## Display server detection
+
+Linux supports both X11 and Wayland:
+
+### Display server selection
+
+```cpp
+auto GetWindowManager(CacheManager& cache) -> Result<String> {
+  return cache.getOrSet<String>("linux_wm", [&]() -> Result<String> {
+    if (GetEnv("WAYLAND_DISPLAY"))
+      return GetWaylandCompositor();
+    
+    if (GetEnv("DISPLAY"))
+      return GetX11WindowManager();
+    
+    ERR(NotFound, "No display server detected");
+  });
+}
+```
+
+### Wayland compositor detection
+
+```cpp
+#if DRAC_USE_WAYLAND
+auto GetWaylandCompositor() -> Result<String> {
+  const wl::DisplayGuard display;
+  if (!display)
+    ERR(ApiUnavailable, "Failed to connect to Wayland display");
+  
+  i32 fd = display.fd();
+  if (fd < 0)
+    ERR(ApiUnavailable, "Failed to get Wayland file descriptor");
+  
+  // Get compositor process ID via socket credentials
+  ucred cred;
+  socklen_t len = sizeof(cred);
+  if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) == -1)
+    ERR(ApiUnavailable, "Failed to get socket credentials (SO_PEERCRED)");
+  
+  // Read compositor executable path
+  Array<char, PATH_MAX> exeRealPathBuf;
+  String exeLinkPath = std::format("/proc/{}/exe", cred.pid);
+  isize bytesRead = readlink(exeLinkPath.c_str(), exeRealPathBuf.data(), exeRealPathBuf.size() - 1);
+  
+  if (bytesRead == -1)
+    ERR_FMT(IoError, "Failed to read link '{}'", exeLinkPath);
+  
+  exeRealPathBuf[bytesRead] = '\0';
+  
+  // Extract compositor name from path
+  StringView pathView(exeRealPathBuf.data(), bytesRead);
+  usize lastSlash = pathView.find_last_of('/');
+  StringView compositorName = pathView.substr(lastSlash + 1);
+  
+  // Handle NixOS wrapper (e.g., ".sway-wrapped" -> "sway")
+  if (compositorName.starts_with(".") && compositorName.ends_with("-wrapped"))
+    compositorName = compositorName.substr(1, compositorName.length() - 9);
+  
+  return String(compositorName);
+}
+#endif
+```
+
+### X11 window manager detection
+
+```cpp
+#if DRAC_USE_XCB
+auto GetX11WindowManager() -> Result<String> {
+  using namespace xcb;
+  
+  const DisplayGuard conn;
+  if (!conn)
+    ERR(ApiUnavailable, "Failed to connect to X server");
+  
+  // Intern atoms
+  auto internAtom = [&](StringView name) -> Result<Atom> {
+    const ReplyGuard<IntAtomReply> reply(
+      InternAtomReply(conn.get(), InternAtom(conn.get(), 0, name.size(), name.data()), nullptr)
+    );
+    if (!reply)
+      ERR_FMT(PlatformSpecific, "Failed to get atom for '{}'", name);
+    return reply->atom;
+  };
+  
+  Result<Atom> supportingWmCheckAtom = internAtom("_NET_SUPPORTING_WM_CHECK");
+  Result<Atom> wmNameAtom = internAtom("_NET_WM_NAME");
+  Result<Atom> utf8StringAtom = internAtom("UTF8_STRING");
+  
+  // Get WM window ID
+  const ReplyGuard<GetPropReply> wmWindowReply(
+    GetPropertyReply(
+      conn.get(),
+      GetProperty(conn.get(), 0, conn.rootScreen()->root, *supportingWmCheckAtom, ATOM_WINDOW, 0, 1),
+      nullptr
+    )
+  );
+  
+  if (!wmWindowReply || wmWindowReply->type != ATOM_WINDOW)
+    ERR(NotFound, "Failed to get _NET_SUPPORTING_WM_CHECK property");
+  
+  Window wmRootWindow = *static_cast<Window*>(GetPropertyValue(wmWindowReply.get()));
+  
+  // Get WM name
+  const ReplyGuard<GetPropReply> wmNameReply(
+    GetPropertyReply(
+      conn.get(),
+      GetProperty(conn.get(), 0, wmRootWindow, *wmNameAtom, *utf8StringAtom, 0, 1024),
+      nullptr
+    )
+  );
+  
+  if (!wmNameReply || wmNameReply->type != *utf8StringAtom)
+    ERR(NotFound, "Failed to get _NET_WM_NAME property");
+  
+  const char* nameData = static_cast<const char*>(GetPropertyValue(wmNameReply.get()));
+  usize length = GetPropertyValueLength(wmNameReply.get());
+  
+  return String(nameData, length);
+}
+#endif
+```
+
+### X11 display enumeration
+
+```cpp
+#if DRAC_USE_XCB
+auto GetX11Displays() -> Result<Vec<DisplayInfo>> {
+  using namespace xcb;
+  
+  DisplayGuard conn;
+  if (!conn)
+    ERR(ApiUnavailable, "Failed to connect to X server");
+  
+  Screen* screen = conn.rootScreen();
+  
+  // Get screen resources
+  const ReplyGuard<RandrGetScreenResourcesCurrentReply> screenResourcesReply(
+    GetScreenResourcesCurrentReply(
+      conn.get(),
+      GetScreenResourcesCurrent(conn.get(), screen->root),
+      nullptr
+    )
+  );
+  
+  RandrOutput* outputs = GetScreenResourcesCurrentOutputs(screenResourcesReply.get());
+  i32 outputCount = GetScreenResourcesCurrentOutputsLength(screenResourcesReply.get());
+  
+  Vec<DisplayInfo> displays;
+  
+  for (i32 i = 0; i < outputCount; ++i) {
+    const ReplyGuard<RandrGetOutputInfoReply> outputInfoReply(
+      GetOutputInfoReply(
+        conn.get(),
+        GetOutputInfo(conn.get(), outputs[i], CURRENT_TIME),
+        nullptr
+      )
+    );
+    
+    if (!outputInfoReply || outputInfoReply->crtc == NONE)
+      continue;
+    
+    const ReplyGuard<RandrGetCrtcInfoReply> crtcInfoReply(
+      GetCrtcInfoReply(
+        conn.get(),
+        GetCrtcInfo(conn.get(), outputInfoReply->crtc, CURRENT_TIME),
+        nullptr
+      )
+    );
+    
+    displays.emplace_back(
+      outputs[i],
+      DisplayInfo::Resolution { .width = crtcInfoReply->width, .height = crtcInfoReply->height },
+      refreshRate,
+      isPrimary
+    );
+  }
+  
+  return displays;
+}
+#endif
+```
+
+## Desktop environment detection
+
+```cpp
+Result<String> xdgEnv = GetEnv("XDG_CURRENT_DESKTOP");
+if (xdgEnv) {
+  String desktop = *xdgEnv;
+  // Handle colon-separated list (e.g., "sway:wlroots")
+  if (usize colonPos = desktop.find(':'); colonPos != String::npos)
+    desktop.resize(colonPos);
+  return desktop;
+}
+
+// Fallback to DESKTOP_SESSION
+Result<String> sessionEnv = GetEnv("DESKTOP_SESSION");
+if (sessionEnv)
+  return *sessionEnv;
+
+ERR(ApiUnavailable, "Failed to get desktop session");
+```
+
+## Shell detection
+
+```cpp
+return GetEnv("SHELL").transform([](String shellPath) -> String {
+  constexpr Array<Pair<StringView, StringView>, 5> shellMap {{
+    { "/usr/bin/bash", "Bash" },
+    { "/usr/bin/zsh",  "Zsh" },
+    { "/usr/bin/fish", "Fish" },
+    { "/usr/bin/nu",   "Nushell" },
+    { "/usr/bin/sh",   "SH" },
+  }};
+  
+  for (const auto& [exe, name] : shellMap)
+    if (shellPath == exe)
+      return String(name);
+  
+  // Fallback: extract basename
+  if (usize lastSlash = shellPath.find_last_of('/'); lastSlash != String::npos)
+    return shellPath.substr(lastSlash + 1);
+  
+  return shellPath;
+});
+```
+
+## Network interfaces
+
+```cpp
+auto CollectNetworkInterfaces() -> Result<Map<String, NetworkInterface>> {
+  ifaddrs* ifaddrList = nullptr;
+  if (getifaddrs(&ifaddrList) == -1)
+    ERR_FMT(InternalError, "getifaddrs failed: {}", strerror(errno));
+  
+  UniquePointer<ifaddrs, decltype(&freeifaddrs)> ifaddrsDeleter(ifaddrList, &freeifaddrs);
+  
+  Map<String, NetworkInterface> interfaceMap;
+  
+  for (ifaddrs* ifa = ifaddrList; ifa != nullptr; ifa = ifa->ifa_next) {
+    if (!ifa->ifa_addr)
+      continue;
+    
+    NetworkInterface& iface = interfaceMap[ifa->ifa_name];
+    iface.name = ifa->ifa_name;
+    iface.isUp = ifa->ifa_flags & IFF_UP;
+    iface.isLoopback = ifa->ifa_flags & IFF_LOOPBACK;
+    
+    if (ifa->ifa_addr->sa_family == AF_INET) {
+      Array<char, NI_MAXHOST> host;
+      getnameinfo(ifa->ifa_addr, sizeof(sockaddr_in), host.data(), host.size(), nullptr, 0, NI_NUMERICHOST);
+      iface.ipv4Address = String(host.data());
+    }
+    else if (ifa->ifa_addr->sa_family == AF_PACKET) {
+      auto* sll = reinterpret_cast<sockaddr_ll*>(ifa->ifa_addr);
+      if (sll->sll_halen == 6) {
+        iface.macAddress = std::format(
+          "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+          sll->sll_addr[0], sll->sll_addr[1], sll->sll_addr[2],
+          sll->sll_addr[3], sll->sll_addr[4], sll->sll_addr[5]
+        );
+      }
+    }
+  }
+  
+  return interfaceMap;
+}
+```
+
+### Primary interface detection
+
+```cpp
+String primaryInterfaceName;
+std::ifstream routeFile("/proc/net/route");
+
+if (routeFile.is_open()) {
+  String line;
+  std::getline(routeFile, line);  // Skip header
+  
+  while (std::getline(routeFile, line)) {
+    std::istringstream iss(line);
+    String iface, dest;
+    if (iss >> iface >> dest && dest == "00000000") {
+      primaryInterfaceName = iface;
+      break;
+    }
+  }
+}
+```
+
+## Battery information
+
+```cpp
+const char* powerSupplyPath = "/sys/class/power_supply";
+
+// Find battery device
+fs::path batteryPath;
+for (const auto& entry : fs::directory_iterator(powerSupplyPath)) {
+  Result<String> type = ReadSysFile(entry.path() / "type");
+  if (type && *type == "Battery") {
+    batteryPath = entry.path();
+    break;
+  }
+}
+
+// Read battery percentage
+Option<u8> percentage = ReadSysFile(batteryPath / "capacity")
+  .transform([](const String& str) -> Option<u8> {
+    return TryParse<u8>(str);
+  })
+  .value_or(None);
+
+// Read battery status
+Battery::Status status = ReadSysFile(batteryPath / "status")
+  .transform([percentage](const String& statusStr) -> Battery::Status {
+    if (statusStr == "Charging") return Charging;
+    if (statusStr == "Discharging") return Discharging;
+    if (statusStr == "Full") return Full;
+    if (statusStr == "Not charging" && percentage && *percentage == 100) return Full;
+    return Unknown;
+  })
+  .value_or(Unknown);
+
+// Read time remaining
+Option<std::chrono::seconds> timeRemaining = 
+  ReadSysFile(batteryPath / "time_to_empty_now")
+    .transform([](const String& str) -> Option<std::chrono::seconds> {
+      if (Option<i32> minutes = TryParse<i32>(str); minutes && *minutes > 0)
+        return std::chrono::minutes(*minutes);
+      return None;
+    })
+    .value_or(None);
+```
+
+## Package managers
+
+Linux implementation supports multiple package managers:
+
+### APK (Alpine)
+
+```cpp
+const fs::path apkDbPath = "/lib/apk/db/installed";
+std::ifstream file(apkDbPath);
+u64 count = 0;
+String line;
+
+while (std::getline(file, line))
+  if (line.empty())
+    count++;  // Empty line separates packages
+```
+
+### DPKG (Debian/Ubuntu)
+
+```cpp
+GetCountFromDirectory(cache, "dpkg", "/var/lib/dpkg/info", ".list");
+```
+
+### Pacman (Arch)
+
+```cpp
+GetCountFromDirectory(cache, "pacman", "/var/lib/pacman/local", true);
+```
+
+### RPM (Fedora/RHEL)
+
+```cpp
+GetCountFromDb(cache, "rpm", "/var/lib/rpm/rpmdb.sqlite", "SELECT COUNT(*) FROM Installtid");
+```
+
+### XBPS (Void Linux)
+
+```cpp
+#ifdef HAVE_PUGIXML
+const char* xbpsDbPath = "/var/db/xbps";
+fs::path plistPath;
+
+for (const auto& entry : fs::directory_iterator(xbpsDbPath)) {
+  String filename = entry.path().filename().string();
+  if (filename.starts_with("pkgdb-") && filename.ends_with(".plist")) {
+    plistPath = entry.path();
+    break;
+  }
+}
+
+return GetCountFromPlist("xbps", plistPath);
+#endif
+```
+
+### Moss (Serpent OS)
+
+```cpp
+Result<u64> count = GetCountFromDb(cache, "moss", "/.moss/db/install", "SELECT COUNT(*) FROM meta");
+if (count && *count > 0)
+  return *count - 1;  // Subtract metadata entry
+```
+
+## Uptime
+
+```cpp
+struct sysinfo info;
+if (sysinfo(&info) == -1)
+  ERR(InternalError, "sysinfo() failed");
+
+return std::chrono::seconds(info.uptime);
+```
+
+## Disk usage
+
+Linux uses the shared Unix implementation:
+
+```cpp
+return os::unix_shared::GetRootDiskUsage();
+```
+
+## Kernel version
+
+```cpp
+return os::unix_shared::GetKernelRelease();
+```
+
+## glibc stub
+
+For glibc compatibility:
+
+```cpp
+#ifdef __GLIBC__
+extern "C" auto issetugid() -> usize { return 0; }
+#endif
+```
+
+<Note>
+This stub is required because some libraries check for `issetugid` which is not present in glibc.
+</Note>
+
+## Implementation location
+
+**File:** `src/Lib/OS/Linux.cpp` (1,252 lines)
+
+**Namespace:** `draconis::core::system`
+
+**Build requirement:** Requires `__linux__` macro
+
+**Optional features:** XCB, Wayland, pugixml (controlled by build options)

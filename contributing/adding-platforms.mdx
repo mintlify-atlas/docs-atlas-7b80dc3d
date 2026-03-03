@@ -1,0 +1,365 @@
+---
+title: Adding platform support
+description: Learn how to add support for new operating systems and platforms
+---
+
+Platform-specific code in Draconis++ lives in `src/Lib/OS/`. Each platform has its own implementation file for system information gathering.
+
+## Supported platforms
+
+Currently supported platforms:
+
+| File | Platform | Status |
+|------|----------|--------|
+| `Windows.cpp` | Windows 10/11 | Full support |
+| `Linux.cpp` | Linux (glibc/musl) | Full support |
+| `macOS.cpp` | macOS 12+ | Full support |
+| `BSD.cpp` | FreeBSD, OpenBSD, NetBSD | Full support |
+| `Haiku.cpp` | Haiku OS | Full support |
+| `Serenity.cpp` | SerenityOS | Full support |
+
+## Adding a new platform
+
+<Steps>
+  <Step title="Create platform implementation file">
+    Create a new `.cpp` file in `src/Lib/OS/` for your platform:
+    
+    ```bash
+    touch src/Lib/OS/MyPlatform.cpp
+    ```
+  </Step>
+
+  <Step title="Check for existing abstractions">
+    Review the public API in `include/Drac++/Core/System.hpp` to see which functions need implementation.
+    
+    Common functions to implement:
+    - `GetMemInfo()` - Memory usage information
+    - `GetOperatingSystem()` - OS version and name
+    - `GetDesktopEnvironment()` - Desktop environment detection
+    - `GetCpuInfo()` - CPU information
+    - And many more...
+  </Step>
+
+  <Step title="Implement platform-specific functions">
+    Implement each function using platform-specific APIs. Use preprocessor guards to conditionally compile code.
+  </Step>
+
+  <Step title="Update build system">
+    Add your new file to the Meson build configuration in `src/Lib/OS/meson.build`.
+  </Step>
+
+  <Step title="Test your implementation">
+    Build and test your changes:
+    
+    ```bash
+    just rebuild
+    just test
+    ```
+  </Step>
+</Steps>
+
+## Platform detection macros
+
+The build system defines these macros for compile-time platform detection:
+
+| Macro | Condition |
+|-------|----------|
+| `DRAC_ARCH_X86_64` | x86_64 architecture |
+| `DRAC_ARCH_AARCH64` | ARM64 architecture |
+| `DRAC_ARCH_64BIT` | 64-bit pointer size |
+| `DRAC_DEBUG` | Debug build |
+
+Standard platform detection macros:
+
+| Macro | Platform |
+|-------|----------|
+| `__linux__` | Linux |
+| `_WIN32` | Windows |
+| `__APPLE__` | macOS |
+| `__FreeBSD__` | FreeBSD |
+| `__OpenBSD__` | OpenBSD |
+| `__NetBSD__` | NetBSD |
+| `__HAIKU__` | Haiku OS |
+
+## Using preprocessor guards
+
+Use preprocessor guards to write platform-specific code:
+
+```cpp
+#include "Drac++/Core/System.hpp"
+#include "Drac++/Utils/Types.hpp"
+
+using namespace draconis::utils::types;
+
+namespace draconis::core::system {
+
+#ifdef __linux__
+  // Linux-specific implementation
+  auto GetBatteryLevel() -> Result<u8> {
+    // Read from /sys/class/power_supply/...
+  }
+#elifdef _WIN32
+  // Windows-specific implementation
+  auto GetBatteryLevel() -> Result<u8> {
+    SYSTEM_POWER_STATUS status;
+    if (!GetSystemPowerStatus(&status))
+      return Err(DracError("Failed to get power status"));
+    return status.BatteryLifePercent;
+  }
+#elifdef __APPLE__
+  // macOS-specific implementation
+  auto GetBatteryLevel() -> Result<u8> {
+    // Use IOKit to query battery
+  }
+#else
+  // Fallback for unsupported platforms
+  auto GetBatteryLevel() -> Result<u8> {
+    return Err(DracError("Battery monitoring not supported on this platform"));
+  }
+#endif
+
+} // namespace draconis::core::system
+```
+
+## Example: Adding a new system info function
+
+### Step 1: Declare in header
+
+Add the function declaration to `include/Drac++/Core/System.hpp`:
+
+```cpp
+namespace draconis::core::system {
+  /**
+   * @brief Fetches battery level.
+   * @return Battery level as percentage (0-100).
+   */
+  auto GetBatteryLevel() -> Result<u8>;
+}
+```
+
+### Step 2: Implement for Windows
+
+In `src/Lib/OS/Windows.cpp`:
+
+```cpp
+#include "Drac++/Core/System.hpp"
+#include "Drac++/Utils/Error.hpp"
+#include "Drac++/Utils/Types.hpp"
+
+#include <windows.h>
+
+using namespace draconis::utils;
+using namespace draconis::utils::types;
+
+namespace draconis::core::system {
+
+auto GetBatteryLevel() -> Result<u8> {
+  SYSTEM_POWER_STATUS status;
+  
+  if (!GetSystemPowerStatus(&status))
+    return Err(error::DracError("Failed to get power status"));
+  
+  if (status.BatteryLifePercent == 255)
+    return Err(error::DracError("Battery status unknown"));
+  
+  return status.BatteryLifePercent;
+}
+
+} // namespace draconis::core::system
+```
+
+### Step 3: Implement for Linux
+
+In `src/Lib/OS/Linux.cpp`:
+
+```cpp
+#include "Drac++/Core/System.hpp"
+#include "Drac++/Utils/Error.hpp"
+#include "Drac++/Utils/Types.hpp"
+
+#include <fstream>
+#include <filesystem>
+
+using namespace draconis::utils;
+using namespace draconis::utils::types;
+namespace fs = std::filesystem;
+
+namespace draconis::core::system {
+
+auto GetBatteryLevel() -> Result<u8> {
+  const fs::path powerSupplyPath = "/sys/class/power_supply";
+  
+  if (!fs::exists(powerSupplyPath))
+    return Err(error::DracError("Power supply path not found"));
+  
+  // Find BAT0, BAT1, etc.
+  for (const auto& entry : fs::directory_iterator(powerSupplyPath)) {
+    if (entry.path().filename().string().starts_with("BAT")) {
+      auto capacityFile = entry.path() / "capacity";
+      
+      std::ifstream file(capacityFile);
+      if (!file)
+        continue;
+      
+      u32 capacity;
+      file >> capacity;
+      
+      if (capacity > 100)
+        return Err(error::DracError("Invalid battery capacity"));
+      
+      return static_cast<u8>(capacity);
+    }
+  }
+  
+  return Err(error::DracError("No battery found"));
+}
+
+} // namespace draconis::core::system
+```
+
+### Step 4: Implement for macOS
+
+In `src/Lib/OS/macOS.cpp` (or create `src/Lib/OS/macOS/Battery.mm` for Objective-C++):
+
+```cpp
+#include "Drac++/Core/System.hpp"
+#include "Drac++/Utils/Error.hpp"
+#include "Drac++/Utils/Types.hpp"
+
+#include <IOKit/ps/IOPowerSources.h>
+#include <IOKit/ps/IOPSKeys.h>
+
+using namespace draconis::utils;
+using namespace draconis::utils::types;
+
+namespace draconis::core::system {
+
+auto GetBatteryLevel() -> Result<u8> {
+  CFTypeRef powerInfo = IOPSCopyPowerSourcesInfo();
+  if (!powerInfo)
+    return Err(error::DracError("Failed to get power sources info"));
+  
+  CFArrayRef powerSources = IOPSCopyPowerSourcesList(powerInfo);
+  if (!powerSources) {
+    CFRelease(powerInfo);
+    return Err(error::DracError("Failed to get power sources list"));
+  }
+  
+  // Get battery percentage...
+  // (Implementation details omitted for brevity)
+  
+  CFRelease(powerSources);
+  CFRelease(powerInfo);
+  
+  return batteryLevel;
+}
+
+} // namespace draconis::core::system
+```
+
+## Platform-specific notes
+
+### Windows
+
+- Use `WString` for Windows API calls requiring `wchar_t*`
+- Convert between UTF-8 and UTF-16:
+  - `ConvertWStringToUTF8()` - Wide string to UTF-8
+  - `ConvertUTF8ToWString()` - UTF-8 to wide string
+- Link against Windows libraries: `dwmapi`, `windowsapp`, `setupapi`, `dxgi`
+- Use COM APIs when necessary, ensure proper initialization and cleanup
+
+```cpp
+// Example: Using wide strings on Windows
+WString widePath = ConvertUTF8ToWString(path);
+HANDLE handle = CreateFileW(
+  widePath.c_str(),
+  GENERIC_READ,
+  FILE_SHARE_READ,
+  nullptr,
+  OPEN_EXISTING,
+  FILE_ATTRIBUTE_NORMAL,
+  nullptr
+);
+```
+
+### macOS
+
+- Objective-C++ code goes in `src/Lib/OS/macOS/`
+- Use `.mm` extension for Objective-C++ files
+- Link frameworks via `appleframeworks` dependency in Meson
+- Use Core Foundation and IOKit for system information
+- Always release CF objects with `CFRelease()`
+
+```cpp
+// Example: Using Core Foundation
+CFTypeRef value = CFDictionaryGetValue(dict, key);
+if (value && CFGetTypeID(value) == CFStringGetTypeID()) {
+  CFStringRef str = static_cast<CFStringRef>(value);
+  // Use string...
+}
+CFRelease(dict);
+```
+
+### Linux
+
+- Optional dependencies: `xcb`, `wayland-client`, `dbus-1`, `pugixml`
+- Check feature flags:
+  - `DRAC_USE_XCB` - X11/XCB support
+  - `DRAC_USE_WAYLAND` - Wayland support
+- Read system info from:
+  - `/proc/` - Process and system information
+  - `/sys/` - Device and driver information
+  - `/etc/` - System configuration
+
+```cpp
+// Example: Reading from /proc
+auto ReadProcFile(StringView filename) -> Result<String> {
+  std::ifstream file("/proc/" + String(filename));
+  if (!file)
+    return Err(error::DracError("Failed to open /proc file"));
+  
+  String content;
+  std::getline(file, content);
+  return content;
+}
+```
+
+### BSD
+
+- Use `sysctl` and `sysctlbyname` for system information
+- Different BSD variants have different sysctl names
+- Check platform macros: `__FreeBSD__`, `__OpenBSD__`, `__NetBSD__`, `__DragonFly__`
+
+```cpp
+// Example: Using sysctl
+u64 physmem = 0;
+usize len = sizeof(physmem);
+
+#ifdef __NetBSD__
+if (sysctlbyname("hw.physmem64", &physmem, &len, nullptr, 0) != 0)
+  return Err(error::DracError("sysctl failed"));
+#else
+if (sysctlbyname("hw.physmem", &physmem, &len, nullptr, 0) != 0)
+  return Err(error::DracError("sysctl failed"));
+#endif
+```
+
+## Testing platform-specific code
+
+When adding platform support:
+
+1. **Test on actual hardware** - Virtual machines may not expose all features
+2. **Test edge cases** - Missing files, permission denied, invalid values
+3. **Add unit tests** - Test parsing and error handling
+4. **Document failure modes** - What can go wrong and when
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Code style" icon="paintbrush" href="/contributing/code-style">
+    Review code style guidelines
+  </Card>
+  <Card title="Testing" icon="flask" href="/contributing/testing">
+    Learn about testing requirements
+  </Card>
+</CardGroup>

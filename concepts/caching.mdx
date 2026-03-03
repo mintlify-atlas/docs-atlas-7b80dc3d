@@ -1,0 +1,375 @@
+---
+title: Caching
+description: CacheManager system, cache policies, and performance optimization
+---
+
+Draconis++ includes a sophisticated caching system that reduces redundant system calls and external API requests.
+
+## CacheManager overview
+
+The `CacheManager` class provides a thread-safe, multi-tier caching system:
+
+```cpp
+#include <Drac++/Utils/CacheManager.hpp>
+
+using namespace draconis::utils::cache;
+using namespace draconis::utils::types;
+
+CacheManager cache;
+```
+
+### Cache tiers
+
+1. **In-memory cache**: Fastest, volatile (lost on exit)
+2. **Temporary directory**: Persists until reboot or system cleanup
+3. **Persistent directory**: Stored in user cache directory
+
+<Note>
+  The cache automatically checks all tiers in order: in-memory → disk → fetch.
+</Note>
+
+## Cache locations
+
+```cpp
+enum class CacheLocation : u8 {
+  InMemory,      // Volatile, fastest
+  TempDirectory, // Persists until reboot
+  Persistent     // User-level cache directory
+};
+```
+
+### Platform-specific cache directories
+
+| Platform | Persistent Cache Directory |
+|----------|----------------------------|
+| Linux/BSD | `~/.cache/draconis++` |
+| macOS | `~/Library/Caches/draconis++` |
+| Windows | `%LOCALAPPDATA%/draconis++/cache` |
+
+## Cache policies
+
+A `CachePolicy` defines where and how long to cache data:
+
+```cpp
+struct CachePolicy {
+  CacheLocation location = CacheLocation::Persistent;
+  Option<seconds> ttl = days(1);  // Time-to-live (default: 1 day)
+};
+```
+
+### Predefined policies
+
+```cpp
+// In-memory only, no expiration
+auto policy = CachePolicy::inMemory();
+
+// Persistent, never expires
+auto policy = CachePolicy::neverExpire();
+
+// Temporary directory, no expiration
+auto policy = CachePolicy::tempDirectory();
+```
+
+### Custom policies
+
+```cpp
+using std::chrono::hours;
+using std::chrono::minutes;
+
+// Cache for 2 hours in persistent storage
+CachePolicy shortLived{
+  .location = CacheLocation::Persistent,
+  .ttl = hours(2)
+};
+
+// Cache for 30 minutes in temp directory
+CachePolicy tempShortLived{
+  .location = CacheLocation::TempDirectory,
+  .ttl = minutes(30)
+};
+```
+
+<Tip>
+  Use shorter TTLs for frequently changing data (e.g., weather) and longer TTLs for static data (e.g., OS version).
+</Tip>
+
+## Using the cache
+
+### Basic usage with getOrSet
+
+The `getOrSet` method checks the cache or calls a fetcher function:
+
+```cpp
+auto fetchWeather() -> Result<WeatherData> {
+  CacheManager cache;
+  
+  return cache.getOrSet<WeatherData>(
+    "weather_data",
+    [&]() -> Result<WeatherData> {
+      // This only runs on cache miss
+      return fetchFromWeatherAPI();
+    }
+  );
+}
+```
+
+### With custom policies
+
+```cpp
+auto fetchWeather() -> Result<WeatherData> {
+  CacheManager cache;
+  
+  // Override default policy
+  CachePolicy weatherPolicy{
+    .location = CacheLocation::Persistent,
+    .ttl = minutes(30)  // Weather updates every 30 minutes
+  };
+  
+  return cache.getOrSet<WeatherData>(
+    "weather_data",
+    weatherPolicy,
+    [&]() -> Result<WeatherData> {
+      return fetchFromWeatherAPI();
+    }
+  );
+}
+```
+
+### In-memory caching
+
+```cpp
+auto getSystemInfo() -> Result<SystemInfo> {
+  CacheManager cache;
+  
+  // Cache only in memory (fast, volatile)
+  return cache.getOrSet<SystemInfo>(
+    "system_info",
+    CachePolicy::inMemory(),
+    [&]() -> Result<SystemInfo> {
+      return collectSystemInfo();
+    }
+  );
+}
+```
+
+## Global cache policy
+
+Set a default policy for all cache operations:
+
+```cpp
+CacheManager cache;
+
+// Set global default
+CachePolicy globalPolicy{
+  .location = CacheLocation::Persistent,
+  .ttl = hours(6)
+};
+cache.setGlobalPolicy(globalPolicy);
+
+// This uses the global policy
+auto result = cache.getOrSet<Data>("key", fetcher);
+
+// This overrides the global policy
+auto result2 = cache.getOrSet<Data>("key", CachePolicy::inMemory(), fetcher);
+```
+
+## Cache invalidation
+
+### Invalidate specific entry
+
+```cpp
+cache.invalidate("weather_data");
+```
+
+### Invalidate all entries
+
+```cpp
+// Clear all caches (in-memory and on-disk)
+u8 removedCount = cache.invalidateAll();
+std::println("Removed {} cache entries", removedCount);
+
+// With logging
+u8 removedCount = cache.invalidateAll(true);
+```
+
+<Warning>
+  `invalidateAll()` removes all cache files from both persistent and temporary directories. Use with caution.
+</Warning>
+
+## Bypassing the cache
+
+Disable caching globally at runtime:
+
+```cpp
+// Disable all caching (useful for --ignore-cache CLI flag)
+CacheManager::ignoreCache = true;
+
+// All getOrSet calls now skip the cache
+auto result = cache.getOrSet<Data>("key", fetcher);
+// This always calls fetcher, never reads/writes cache
+```
+
+<Tip>
+  This is perfect for implementing a `--no-cache` or `--fresh` command-line option.
+</Tip>
+
+## Thread safety
+
+All cache operations are thread-safe:
+
+```cpp
+CacheManager cache;  // Shared across threads
+
+// Thread 1
+std::thread t1([&]() {
+  auto data = cache.getOrSet<Data>("key1", fetcher1);
+});
+
+// Thread 2
+std::thread t2([&]() {
+  auto data = cache.getOrSet<Data>("key2", fetcher2);
+});
+```
+
+<Note>
+  Internal mutex protection ensures safe concurrent access without external synchronization.
+</Note>
+
+## Cache serialization
+
+The cache uses BEVE (Binary Encoding for Variant-like Entities) format for efficient serialization:
+
+```cpp
+template <typename T>
+struct CacheEntry {
+  T data;                      // The cached value
+  Option<u64> expires;         // UNIX timestamp (None = no expiry)
+};
+```
+
+<Tip>
+  Your cached types must be serializable with glaze. Most standard types and simple structs work automatically.
+</Tip>
+
+## Performance characteristics
+
+| Operation | In-Memory | Temp Directory | Persistent |
+|-----------|-----------|----------------|-----------|
+| Read | ~10 ns | ~1-5 ms | ~1-5 ms |
+| Write | ~50 ns | ~5-20 ms | ~5-20 ms |
+| Persistence | No | Until reboot | Indefinite |
+
+## Real-world example
+
+```cpp
+using namespace draconis::utils::cache;
+using namespace draconis::utils::types;
+
+class WeatherService {
+public:
+  auto getWeather(StringView city) -> Result<WeatherData> {
+    String cacheKey = std::format("weather_{}", city);
+    
+    CachePolicy policy{
+      .location = CacheLocation::Persistent,
+      .ttl = minutes(30)  // Weather data stale after 30 min
+    };
+    
+    return m_cache.getOrSet<WeatherData>(
+      cacheKey,
+      policy,
+      [&]() -> Result<WeatherData> {
+        // Only called on cache miss
+        return fetchFromAPI(city);
+      }
+    );
+  }
+  
+  auto clearCache() -> void {
+    m_cache.invalidateAll();
+  }
+  
+private:
+  CacheManager m_cache;
+  
+  auto fetchFromAPI(StringView city) -> Result<WeatherData> {
+    // Network request to weather API
+    // ...
+  }
+};
+```
+
+## Best practices
+
+<Steps>
+  <Step title="Choose appropriate TTLs">
+    ```cpp
+    // Static data: long or no TTL
+    CachePolicy osInfo{
+      .ttl = days(7)  // OS version rarely changes
+    };
+    
+    // Dynamic data: short TTL
+    CachePolicy weather{
+      .ttl = minutes(15)  // Weather updates frequently
+    };
+    ```
+  </Step>
+  
+  <Step title="Use in-memory cache for session data">
+    ```cpp
+    // Data only needed during current run
+    cache.getOrSet<SessionData>(
+      "session",
+      CachePolicy::inMemory(),
+      fetcher
+    );
+    ```
+  </Step>
+  
+  <Step title="Cache expensive operations">
+    ```cpp
+    // Network requests
+    cache.getOrSet<ApiResponse>("api_data", fetchFromNetwork);
+    
+    // Heavy computations
+    cache.getOrSet<ComputedResult>("computation", expensiveCompute);
+    
+    // File I/O
+    cache.getOrSet<FileData>("file_data", readLargeFile);
+    ```
+  </Step>
+  
+  <Step title="Provide cache invalidation">
+    ```cpp
+    class Service {
+    public:
+      auto refresh() -> void {
+        m_cache.invalidate("my_key");
+      }
+      
+      auto clearAll() -> void {
+        m_cache.invalidateAll();
+      }
+    };
+    ```
+  </Step>
+</Steps>
+
+## Compile-time caching control
+
+Caching can be disabled at compile time:
+
+```cpp
+#if DRAC_ENABLE_CACHING
+  // Caching enabled
+#else
+  // All cache operations become no-ops
+#endif
+```
+
+<Note>
+  When caching is disabled, `getOrSet` always calls the fetcher function directly.
+</Note>
+
+CacheManager implementation is in `/home/daytona/workspace/source/include/Drac++/Utils/CacheManager.hpp:45`.

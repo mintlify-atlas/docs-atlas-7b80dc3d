@@ -1,0 +1,612 @@
+---
+title: Platform implementation
+description: How to add platform-specific implementations to Draconis++
+---
+
+This guide explains how to contribute platform-specific code to Draconis++ or implement custom OS support.
+
+## Architecture overview
+
+Draconis++ uses a layered architecture:
+
+- **`include/Drac++/`**: Public API headers (stable interface)
+- **`src/Lib/`**: Library implementation
+  - **`Core/`**: Cross-platform implementations
+  - **`OS/`**: Platform-specific code
+  - **`Services/`**: External service integrations
+  - **`Wrappers/`**: Third-party library wrappers
+- **`src/CLI/`**: Command-line interface application
+
+## Supported platforms
+
+Draconis++ currently supports:
+
+| Platform | File | Description |
+|----------|------|-------------|
+| Windows | `src/Lib/OS/Windows.cpp` | Windows 10/11 |
+| Linux | `src/Lib/OS/Linux.cpp` | Linux (glibc/musl) |
+| macOS | `src/Lib/OS/macOS.cpp` | macOS 12+ |
+| BSD | `src/Lib/OS/BSD.cpp` | FreeBSD, OpenBSD, NetBSD |
+| Haiku | `src/Lib/OS/Haiku.cpp` | Haiku OS |
+| Serenity | `src/Lib/OS/Serenity.cpp` | SerenityOS |
+
+## Adding a new platform function
+
+<Steps>
+
+<Step title="Declare the function in the public header">
+
+Add your function declaration to the appropriate header in `include/Drac++/Core/`:
+
+```cpp System.hpp
+namespace draconis::core::system {
+  /**
+   * @brief Fetches the battery level
+   * @return Battery level percentage (0-100)
+   * 
+   * @details Obtained differently depending on the platform:
+   *  - Windows: GetSystemPowerStatus
+   *  - macOS: IOKit power management
+   *  - Linux: /sys/class/power_supply/
+   * 
+   * @warning This function can fail if:
+   *  - Windows: GetSystemPowerStatus fails
+   *  - macOS: IOKit APIs fail
+   *  - Linux: Power supply sysfs not available
+   */
+  auto GetBatteryLevel(utils::cache::CacheManager& cache) 
+    -> utils::types::Result<utils::types::u8>;
+}
+```
+
+</Step>
+
+<Step title="Implement for each platform">
+
+### Windows implementation
+
+```cpp src/Lib/OS/Windows.cpp
+#include <Drac++/Core/System.hpp>
+#include <Drac++/Utils/Error.hpp>
+#include <Drac++/Utils/Types.hpp>
+#include <windows.h>
+
+using namespace draconis::utils::types;
+using namespace draconis::utils::error;
+using enum DracErrorCode;
+
+namespace draconis::core::system {
+  auto GetBatteryLevel(utils::cache::CacheManager& cache) -> Result<u8> {
+    // Check cache first
+    if (auto cached = cache.get<u8>("battery_level"); cached)
+      return *cached;
+    
+    SYSTEM_POWER_STATUS status;
+    if (!GetSystemPowerStatus(&status))
+      ERR(IoError, "Failed to get power status");
+    
+    if (status.BatteryLifePercent == 255)
+      ERR(NotSupported, "Battery status unknown");
+    
+    u8 level = status.BatteryLifePercent;
+    
+    // Cache for 30 seconds
+    cache.set("battery_level", level, 30);
+    
+    return level;
+  }
+}
+```
+
+### Linux implementation
+
+```cpp src/Lib/OS/Linux.cpp
+#include <Drac++/Core/System.hpp>
+#include <Drac++/Utils/Error.hpp>
+#include <fstream>
+#include <filesystem>
+
+using namespace draconis::utils::types;
+using namespace draconis::utils::error;
+using enum DracErrorCode;
+
+namespace draconis::core::system {
+  auto GetBatteryLevel(utils::cache::CacheManager& cache) -> Result<u8> {
+    // Check cache first
+    if (auto cached = cache.get<u8>("battery_level"); cached)
+      return *cached;
+    
+    namespace fs = std::filesystem;
+    const fs::path powerSupplyPath = "/sys/class/power_supply";
+    
+    if (!fs::exists(powerSupplyPath))
+      ERR(NotSupported, "Power supply sysfs not available");
+    
+    // Find first battery
+    for (const auto& entry : fs::directory_iterator(powerSupplyPath)) {
+      fs::path typePath = entry.path() / "type";
+      
+      if (!fs::exists(typePath))
+        continue;
+      
+      std::ifstream typeFile(typePath);
+      String type;
+      std::getline(typeFile, type);
+      
+      if (type != "Battery")
+        continue;
+      
+      // Read capacity
+      fs::path capacityPath = entry.path() / "capacity";
+      if (!fs::exists(capacityPath))
+        continue;
+      
+      std::ifstream capacityFile(capacityPath);
+      u32 capacity;
+      capacityFile >> capacity;
+      
+      if (capacity > 100)
+        ERR(ParseError, "Invalid battery capacity");
+      
+      u8 level = static_cast<u8>(capacity);
+      
+      // Cache for 30 seconds
+      cache.set("battery_level", level, 30);
+      
+      return level;
+    }
+    
+    ERR(NotFound, "No battery found");
+  }
+}
+```
+
+### macOS implementation
+
+```cpp src/Lib/OS/macOS.cpp
+#include <Drac++/Core/System.hpp>
+#include <Drac++/Utils/Error.hpp>
+#include <IOKit/ps/IOPowerSources.h>
+#include <IOKit/ps/IOPSKeys.h>
+#include <CoreFoundation/CoreFoundation.h>
+
+using namespace draconis::utils::types;
+using namespace draconis::utils::error;
+using enum DracErrorCode;
+
+namespace draconis::core::system {
+  auto GetBatteryLevel(utils::cache::CacheManager& cache) -> Result<u8> {
+    // Check cache first
+    if (auto cached = cache.get<u8>("battery_level"); cached)
+      return *cached;
+    
+    CFTypeRef powerSourceInfo = IOPSCopyPowerSourcesInfo();
+    if (!powerSourceInfo)
+      ERR(IoError, "Failed to get power source info");
+    
+    CFArrayRef powerSources = IOPSCopyPowerSourcesList(powerSourceInfo);
+    if (!powerSources) {
+      CFRelease(powerSourceInfo);
+      ERR(IoError, "Failed to get power sources list");
+    }
+    
+    CFIndex count = CFArrayGetCount(powerSources);
+    u8 level = 0;
+    
+    for (CFIndex i = 0; i < count; i++) {
+      CFDictionaryRef source = IOPSGetPowerSourceDescription(
+        powerSourceInfo, 
+        CFArrayGetValueAtIndex(powerSources, i)
+      );
+      
+      if (!source)
+        continue;
+      
+      CFNumberRef capacityRef = (CFNumberRef)CFDictionaryGetValue(
+        source, 
+        CFSTR(kIOPSCurrentCapacityKey)
+      );
+      
+      if (capacityRef) {
+        i32 capacity;
+        CFNumberGetValue(capacityRef, kCFNumberSInt32Type, &capacity);
+        level = static_cast<u8>(capacity);
+        break;
+      }
+    }
+    
+    CFRelease(powerSources);
+    CFRelease(powerSourceInfo);
+    
+    if (level == 0)
+      ERR(NotFound, "No battery found");
+    
+    // Cache for 30 seconds
+    cache.set("battery_level", level, 30);
+    
+    return level;
+  }
+}
+```
+
+</Step>
+
+<Step title="Update the build system">
+
+Ensure your platform's source file is included in `src/Lib/OS/meson.build`:
+
+```meson
+os_sources = []
+
+if host_machine.system() == 'windows'
+  os_sources += ['Windows.cpp']
+elif host_machine.system() == 'darwin'
+  os_sources += ['macOS.cpp']
+elif host_machine.system() == 'linux'
+  os_sources += ['Linux.cpp']
+# ... other platforms
+endif
+```
+
+</Step>
+
+</Steps>
+
+## Platform detection macros
+
+Use preprocessor macros for conditional compilation:
+
+### Standard macros
+
+```cpp
+#ifdef _WIN32
+  // Windows-specific code
+#elifdef __APPLE__
+  // macOS-specific code
+#elifdef __linux__
+  // Linux-specific code
+#elifdef __FreeBSD__
+  // FreeBSD-specific code
+#elifdef __OpenBSD__
+  // OpenBSD-specific code
+#elifdef __NetBSD__
+  // NetBSD-specific code
+#elifdef __HAIKU__
+  // Haiku-specific code
+#endif
+```
+
+### Custom Draconis++ macros
+
+The build system defines additional macros:
+
+```cpp
+#ifdef DRAC_ARCH_X86_64
+  // x86_64 architecture
+#elifdef DRAC_ARCH_AARCH64
+  // ARM64 architecture
+#endif
+
+#ifdef DRAC_ARCH_64BIT
+  // 64-bit pointer size
+#endif
+
+#ifdef DRAC_DEBUG
+  // Debug build
+#endif
+```
+
+## Using the type system
+
+Always use Draconis++ type aliases in implementation files:
+
+```cpp
+using namespace draconis::utils::types;
+
+auto GetSystemInfo() -> Result<String> {
+  Vec<String> parts;              // std::vector<std::string>
+  Map<String, u64> counts;        // std::map<std::string, uint64_t>
+  Option<String> optional;        // std::optional<std::string>
+  
+  // Use Result<T> for error handling
+  if (someCondition)
+    ERR(IoError, "Something failed");
+  
+  return "System info";
+}
+```
+
+## Error handling conventions
+
+Use the error macros defined in `Utils/Error.hpp`:
+
+```cpp
+#include <Drac++/Utils/Error.hpp>
+
+using enum draconis::utils::error::DracErrorCode;
+
+// Return error with message
+if (failed)
+  ERR(IoError, "Failed to read file");
+
+// Return error with formatted message
+if (count > MAX)
+  ERR_FMT(InvalidArgument, "Count {} exceeds maximum {}", count, MAX);
+
+// Available error codes:
+// - NotFound
+// - NotSupported
+// - IoError
+// - ParseError
+// - InvalidArgument
+// - NetworkError
+// - PermissionDenied
+```
+
+## Windows-specific considerations
+
+### Using wide strings
+
+Windows APIs often require wide strings:
+
+```cpp
+#include <Drac++/Utils/String.hpp>
+
+using namespace draconis::utils::string;
+
+auto QueryRegistry() -> Result<String> {
+  // Convert UTF-8 to wide string for Windows API
+  WString wideKey = ConvertUTF8ToWString("SOFTWARE\\MyKey");
+  
+  HKEY hKey;
+  if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, wideKey.c_str(), 
+                    0, KEY_READ, &hKey) != ERROR_SUCCESS)
+    ERR(IoError, "Failed to open registry key");
+  
+  WString wideValue(256, L'\0');
+  DWORD size = static_cast<DWORD>(wideValue.size() * sizeof(wchar_t));
+  
+  RegQueryValueExW(hKey, L"ValueName", nullptr, nullptr,
+                   reinterpret_cast<LPBYTE>(wideValue.data()), &size);
+  RegCloseKey(hKey);
+  
+  // Convert back to UTF-8
+  return ConvertWStringToUTF8(wideValue);
+}
+```
+
+### Required Windows libraries
+
+Link against necessary libraries in `meson.build`:
+
+```meson
+if host_machine.system() == 'windows'
+  windows_libs = [
+    'dwmapi',      # Desktop Window Manager
+    'windowsapp',  # Windows Runtime
+    'setupapi',    # Device setup
+    'dxgi',        # DirectX Graphics Infrastructure
+  ]
+  
+  foreach lib : windows_libs
+    dracpp_deps += cpp_compiler.find_library(lib)
+  endforeach
+endif
+```
+
+## macOS-specific considerations
+
+### Using Objective-C++
+
+For macOS APIs requiring Objective-C, use `.mm` files:
+
+```objcpp src/Lib/OS/macOS/Display.mm
+#import <Cocoa/Cocoa.h>
+#include <Drac++/Core/System.hpp>
+
+using namespace draconis::utils::types;
+
+auto GetDisplayName() -> Result<String> {
+  @autoreleasepool {
+    NSScreen* mainScreen = [NSScreen mainScreen];
+    if (!mainScreen)
+      ERR(NotFound, "No main screen found");
+    
+    NSString* name = mainScreen.localizedName;
+    return String([name UTF8String]);
+  }
+}
+```
+
+### Linking frameworks
+
+Specify required frameworks:
+
+```meson
+if host_machine.system() == 'darwin'
+  frameworks = [
+    'CoreFoundation',
+    'IOKit',
+    'AppKit',
+    'Metal',
+  ]
+  
+  foreach framework : frameworks
+    dracpp_deps += dependency('appleframeworks', modules: framework)
+  endforeach
+endif
+```
+
+## Linux-specific considerations
+
+### Optional dependencies
+
+Handle optional dependencies gracefully:
+
+```cpp
+#ifdef DRAC_USE_XCB
+  #include <xcb/xcb.h>
+#endif
+
+auto GetWindowManager(utils::cache::CacheManager& cache) -> Result<String> {
+#ifdef DRAC_USE_XCB
+  if (getenv("DISPLAY")) {
+    // X11-specific implementation
+    return GetX11WindowManager(cache);
+  }
+#endif
+
+#ifdef DRAC_USE_WAYLAND
+  if (getenv("WAYLAND_DISPLAY")) {
+    // Wayland-specific implementation
+    return GetWaylandCompositor(cache);
+  }
+#endif
+
+  ERR(NotSupported, "No supported display server found");
+}
+```
+
+### Reading from /proc and /sys
+
+```cpp
+#include <fstream>
+#include <filesystem>
+
+auto ReadSysfsValue(const String& path) -> Result<String> {
+  if (!std::filesystem::exists(path))
+    ERR_FMT(NotFound, "Sysfs path not found: {}", path);
+  
+  std::ifstream file(path);
+  if (!file)
+    ERR_FMT(IoError, "Failed to open: {}", path);
+  
+  String value;
+  std::getline(file, value);
+  
+  if (value.empty())
+    ERR(ParseError, "Empty value read from sysfs");
+  
+  return value;
+}
+
+auto GetCPUModelLinux() -> Result<String> {
+  std::ifstream cpuinfo("/proc/cpuinfo");
+  if (!cpuinfo)
+    ERR(IoError, "Failed to open /proc/cpuinfo");
+  
+  String line;
+  while (std::getline(cpuinfo, line)) {
+    if (line.starts_with("model name")) {
+      usize colonPos = line.find(':');
+      if (colonPos != String::npos)
+        return line.substr(colonPos + 2);
+    }
+  }
+  
+  ERR(NotFound, "CPU model not found in /proc/cpuinfo");
+}
+```
+
+## Code style guidelines
+
+Follow these conventions when implementing platform code:
+
+```cpp
+// Use trailing return type with 'auto'
+auto GetSystemName() -> Result<String>;
+
+// Mark pure functions as [[nodiscard]]
+[[nodiscard]] auto CalculateHash(StringView input) -> u64;
+
+// Use noexcept when appropriate
+auto SafeOperation() noexcept -> bool;
+
+// Prefer constexpr/consteval where possible
+constexpr u32 MAX_BUFFER_SIZE = 4096;
+```
+
+### Naming conventions
+
+| Element | Style | Example |
+|---------|-------|----------|
+| Types/Classes | PascalCase | `SystemInfo` |
+| Functions | PascalCase | `GetCpuInfo()` |
+| Variables | camelCase | `cpuCount` |
+| Constants | SCREAMING_CASE | `MAX_BUFFER_SIZE` |
+| Namespaces | lowercase | `draconis::core` |
+
+## Testing platform implementations
+
+Create platform-specific tests:
+
+```cpp tests/test_platform.cpp
+#include <catch2/catch_test_macros.hpp>
+#include <Drac++/Core/System.hpp>
+#include <Drac++/Utils/CacheManager.hpp>
+
+using namespace draconis::core::system;
+
+TEST_CASE("GetBatteryLevel returns valid percentage", "[platform]") {
+  CacheManager cache;
+  Result<u8> result = GetBatteryLevel(cache);
+  
+  if (result) {
+    REQUIRE(*result <= 100);
+  } else {
+    // Battery info might not be available (desktop systems)
+    REQUIRE(result.error().code == DracErrorCode::NotSupported ||
+            result.error().code == DracErrorCode::NotFound);
+  }
+}
+```
+
+## Submitting changes
+
+When contributing platform implementations:
+
+<Steps>
+
+<Step title="Test your changes">
+
+Run the test suite:
+
+```bash
+just test
+```
+
+</Step>
+
+<Step title="Format your code">
+
+Ensure code is properly formatted:
+
+```bash
+just format
+```
+
+</Step>
+
+<Step title="Create a pull request">
+
+Follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+feat(platform): add battery level support for Windows
+```
+
+Include:
+- Descriptive title
+- Implementation details
+- Test results on your platform
+- Documentation updates
+
+</Step>
+
+</Steps>
+
+## Next steps
+
+- Review the [CONTRIBUTING.md](https://github.com/Draconis-Org/draconis/blob/main/CONTRIBUTING.md) guide
+- Check the [issue tracker](https://github.com/Draconis-Org/draconis/issues) for platform-specific tasks
+- Join the community discussions

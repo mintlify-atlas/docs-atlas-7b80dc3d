@@ -1,0 +1,628 @@
+---
+title: Plugin manager API
+description: High-performance plugin system with lazy loading and efficient resource management
+---
+
+The plugin manager provides a high-performance plugin system for Draconis++ with lazy loading, efficient resource management, and zero-cost abstractions when plugins are disabled.
+
+## Plugin types
+
+The plugin system supports two main plugin types:
+
+- **InfoProvider**: Provides structured information (weather, media, Docker stats, etc.)
+- **OutputFormat**: Adds new output formats (JSON, YAML, Markdown, etc.)
+
+## PluginManager class
+
+The `PluginManager` is a singleton that manages plugin discovery, loading, and lifecycle.
+
+### getInstance
+
+Returns the singleton instance of the plugin manager.
+
+```cpp
+static auto getInstance() -> PluginManager&
+```
+
+<ResponseField name="return" type="PluginManager&">
+  Reference to the singleton PluginManager instance
+</ResponseField>
+
+**Example:**
+
+```cpp
+auto& manager = draconis::core::plugin::PluginManager::getInstance();
+```
+
+Or use the helper function:
+
+```cpp
+auto& manager = draconis::core::plugin::GetPluginManager();
+```
+
+### initialize
+
+Initializes the plugin manager and optionally auto-loads plugins.
+
+```cpp
+auto initialize(
+  const PluginConfig& config = {}
+) -> Result<Unit>
+```
+
+<ParamField path="config" type="const PluginConfig&" default="{}">
+  Plugin configuration containing:
+  - `enabled`: Whether the plugin system is enabled (default: true)
+  - `autoLoad`: Vector of plugin names to automatically load
+</ParamField>
+
+<ResponseField name="return" type="Result<Unit>">
+  Returns success or an error if initialization fails
+</ResponseField>
+
+**What it does:**
+1. Adds default search paths for plugins
+2. Scans for available plugins in search paths
+3. Auto-loads plugins specified in config
+4. Sets the initialized state
+
+**Default plugin search paths:**
+- **Windows**: `%LOCALAPPDATA%\draconis++\plugins`, `%APPDATA%\draconis++\plugins`, `%USERPROFILE%\.config\draconis++\plugins`, `./plugins`
+- **Unix-like**: `/usr/local/lib/draconis++/plugins`, `/usr/lib/draconis++/plugins`, `~/.local/lib/draconis++/plugins`, `./plugins`
+
+**Example:**
+
+```cpp
+#include <Drac++/Core/PluginManager.hpp>
+
+using namespace draconis::core::plugin;
+
+int main() {
+  auto& manager = GetPluginManager();
+  
+  PluginConfig config{
+    .enabled = true,
+    .autoLoad = {"weather", "media"}
+  };
+  
+  if (auto result = manager.initialize(config); !result) {
+    std::println("Failed to initialize plugin manager: {}", 
+      result.error().message());
+    return 1;
+  }
+  
+  return 0;
+}
+```
+
+### shutdown
+
+Shuts down the plugin manager and unloads all plugins.
+
+```cpp
+auto shutdown() -> Unit
+```
+
+**What it does:**
+1. Calls shutdown on all loaded plugins
+2. Unloads all plugin libraries
+3. Clears all plugin state
+
+**Example:**
+
+```cpp
+auto& manager = GetPluginManager();
+manager.shutdown();
+```
+
+### isInitialized
+
+Checks if the plugin manager has been initialized.
+
+```cpp
+auto isInitialized() const -> bool
+```
+
+<ResponseField name="return" type="bool">
+  Returns true if initialized, false otherwise
+</ResponseField>
+
+**Example:**
+
+```cpp
+if (manager.isInitialized()) {
+  // Plugin manager is ready to use
+}
+```
+
+## Plugin discovery and loading
+
+### addSearchPath
+
+Adds a directory to the plugin search paths.
+
+```cpp
+auto addSearchPath(const fs::path& path) -> Unit
+```
+
+<ParamField path="path" type="const fs::path&">
+  Directory path to search for plugins
+</ParamField>
+
+**Example:**
+
+```cpp
+manager.addSearchPath("/opt/draconis-plugins");
+manager.addSearchPath("./custom-plugins");
+```
+
+### getSearchPaths
+
+Returns all configured plugin search paths.
+
+```cpp
+auto getSearchPaths() const -> Vec<fs::path>
+```
+
+<ResponseField name="return" type="Vec<fs::path>">
+  Vector of filesystem paths being searched for plugins
+</ResponseField>
+
+**Example:**
+
+```cpp
+for (const auto& path : manager.getSearchPaths()) {
+  std::println("Searching: {}", path.string());
+}
+```
+
+### loadPlugin
+
+Loads a plugin by name.
+
+```cpp
+auto loadPlugin(
+  const String& pluginName,
+  CacheManager& cache
+) -> Result<Unit>
+```
+
+<ParamField path="pluginName" type="const String&">
+  Name of the plugin to load (without file extension)
+</ParamField>
+
+<ParamField path="cache" type="CacheManager&">
+  Cache manager for plugin data persistence
+</ParamField>
+
+<ResponseField name="return" type="Result<Unit>">
+  Returns success or an error if loading fails
+</ResponseField>
+
+**What it does:**
+1. Searches for the plugin library in search paths
+2. Loads the dynamic library
+3. Retrieves plugin factory functions
+4. Creates the plugin instance
+5. Initializes the plugin with context and cache
+6. Adds the plugin to appropriate type caches
+
+**Error conditions:**
+- Plugin not found in any search path
+- Plugin already loaded
+- Dynamic library loading fails
+- Plugin initialization fails
+- Missing required plugin exports
+
+**Example:**
+
+```cpp
+CacheManager cache;
+
+if (auto result = manager.loadPlugin("weather", cache); !result) {
+  std::println("Failed to load weather plugin: {}", result.error().message());
+}
+```
+
+### unloadPlugin
+
+Unloads a plugin by name.
+
+```cpp
+auto unloadPlugin(const String& pluginName) -> Result<Unit>
+```
+
+<ParamField path="pluginName" type="const String&">
+  Name of the plugin to unload
+</ParamField>
+
+<ResponseField name="return" type="Result<Unit>">
+  Returns success or an error if unloading fails
+</ResponseField>
+
+**What it does:**
+1. Calls shutdown on the plugin
+2. Removes from type-specific caches
+3. Destroys the plugin instance
+4. Unloads the dynamic library
+
+**Error conditions:**
+- Plugin not found
+- Plugin not currently loaded
+
+**Example:**
+
+```cpp
+if (auto result = manager.unloadPlugin("weather"); !result) {
+  std::println("Failed to unload weather plugin: {}", result.error().message());
+}
+```
+
+## Plugin access
+
+### getPlugin
+
+Retrieves a plugin by name.
+
+```cpp
+auto getPlugin(const String& pluginName) const -> Option<IPlugin*>
+```
+
+<ParamField path="pluginName" type="const String&">
+  Name of the plugin to retrieve
+</ParamField>
+
+<ResponseField name="return" type="Option<IPlugin*>">
+  Returns a pointer to the plugin if loaded, None otherwise
+</ResponseField>
+
+**Thread safety:** Read-only access is thread-safe after initialization.
+
+**Example:**
+
+```cpp
+if (auto plugin = manager.getPlugin("weather"); plugin.has_value()) {
+  auto metadata = (*plugin)->getMetadata();
+  std::println("Plugin: {} v{}", metadata.name, metadata.version);
+}
+```
+
+### getInfoProviderPlugins
+
+Returns all loaded info provider plugins.
+
+```cpp
+auto getInfoProviderPlugins() const -> Vec<IInfoProviderPlugin*>
+```
+
+<ResponseField name="return" type="Vec<IInfoProviderPlugin*>">
+  Vector of pointers to all loaded info provider plugins
+</ResponseField>
+
+**Thread safety:** Read-only access is thread-safe after initialization.
+
+**Example:**
+
+```cpp
+for (auto* provider : manager.getInfoProviderPlugins()) {
+  std::println("Provider: {}", provider->getProviderId());
+  
+  if (provider->isEnabled()) {
+    auto result = provider->collectData(cache);
+    if (result.has_value()) {
+      std::println("  {}: {}", 
+        provider->getDisplayLabel(), 
+        provider->getDisplayValue().value_or("N/A"));
+    }
+  }
+}
+```
+
+### getOutputFormatPlugins
+
+Returns all loaded output format plugins.
+
+```cpp
+auto getOutputFormatPlugins() const -> Vec<IOutputFormatPlugin*>
+```
+
+<ResponseField name="return" type="Vec<IOutputFormatPlugin*>">
+  Vector of pointers to all loaded output format plugins
+</ResponseField>
+
+**Thread safety:** Read-only access is thread-safe after initialization.
+
+**Example:**
+
+```cpp
+for (auto* formatter : manager.getOutputFormatPlugins()) {
+  auto formats = formatter->getFormatNames();
+  std::println("Formatter supports: {}", 
+    std::format("{}", fmt::join(formats, ", ")));
+}
+```
+
+### getInfoProviderByName
+
+Retrieves an info provider plugin by its provider ID.
+
+```cpp
+auto getInfoProviderByName(
+  const String& providerId
+) const -> Option<IInfoProviderPlugin*>
+```
+
+<ParamField path="providerId" type="const String&">
+  Provider ID to search for (e.g., "weather", "media")
+</ParamField>
+
+<ResponseField name="return" type="Option<IInfoProviderPlugin*>">
+  Returns a pointer to the provider if found, None otherwise
+</ResponseField>
+
+**Thread safety:** Read-only access is thread-safe after initialization.
+
+**Example:**
+
+```cpp
+if (auto provider = manager.getInfoProviderByName("weather"); 
+    provider.has_value()) {
+  auto json = (*provider)->toJson();
+  std::println("Weather data: {}", json.value_or("{}"));
+}
+```
+
+## Plugin metadata
+
+### listLoadedPlugins
+
+Returns metadata for all loaded plugins.
+
+```cpp
+auto listLoadedPlugins() const -> Vec<PluginMetadata>
+```
+
+<ResponseField name="return" type="Vec<PluginMetadata>">
+  Vector of metadata for all loaded plugins, each containing:
+  - `name`: Plugin name
+  - `version`: Plugin version
+  - `author`: Plugin author
+  - `description`: Plugin description
+  - `type`: Plugin type (InfoProvider or OutputFormat)
+  - `dependencies`: Plugin dependencies structure
+</ResponseField>
+
+**Example:**
+
+```cpp
+for (const auto& meta : manager.listLoadedPlugins()) {
+  std::println("{} v{} by {}", meta.name, meta.version, meta.author);
+  std::println("  {}", meta.description);
+}
+```
+
+### listDiscoveredPlugins
+
+Returns names of all discovered plugin files.
+
+```cpp
+auto listDiscoveredPlugins() const -> Vec<String>
+```
+
+<ResponseField name="return" type="Vec<String>">
+  Vector of plugin names found in search paths (not necessarily loaded)
+</ResponseField>
+
+**Example:**
+
+```cpp
+std::println("Available plugins:");
+for (const auto& name : manager.listDiscoveredPlugins()) {
+  bool loaded = manager.isPluginLoaded(name);
+  std::println("  {} {}", name, loaded ? "(loaded)" : "");
+}
+```
+
+### isPluginLoaded
+
+Checks if a plugin is currently loaded.
+
+```cpp
+auto isPluginLoaded(const String& pluginName) const -> bool
+```
+
+<ParamField path="pluginName" type="const String&">
+  Name of the plugin to check
+</ParamField>
+
+<ResponseField name="return" type="bool">
+  Returns true if the plugin is loaded, false otherwise
+</ResponseField>
+
+**Example:**
+
+```cpp
+if (!manager.isPluginLoaded("weather")) {
+  manager.loadPlugin("weather", cache);
+}
+```
+
+## Plugin context
+
+### GetPluginContext
+
+Returns the default plugin context with standard paths.
+
+```cpp
+auto GetPluginContext() -> PluginContext
+```
+
+<ResponseField name="return" type="PluginContext">
+  Returns a PluginContext struct containing:
+  - `configDir`: Plugin configuration directory
+  - `cacheDir`: Plugin cache directory
+  - `dataDir`: Plugin data directory
+</ResponseField>
+
+**Default paths:**
+- **Windows**: `%LOCALAPPDATA%\draconis++\plugins\{config,cache,data}`
+- **Unix-like**: `~/.config/draconis++/plugins`, `~/.cache/draconis++/plugins`, `~/.local/share/draconis++/plugins`
+
+**Example:**
+
+```cpp
+auto ctx = draconis::core::plugin::GetPluginContext();
+std::println("Plugin config dir: {}", ctx.configDir.string());
+std::println("Plugin cache dir: {}", ctx.cacheDir.string());
+std::println("Plugin data dir: {}", ctx.dataDir.string());
+```
+
+## Plugin interfaces
+
+### IPlugin
+
+Base interface for all plugins.
+
+```cpp
+class IPlugin {
+public:
+  virtual auto getMetadata() const -> const PluginMetadata& = 0;
+  virtual auto initialize(
+    const PluginContext& ctx, 
+    ::PluginCache& cache
+  ) -> Result<Unit> = 0;
+  virtual auto shutdown() -> Unit = 0;
+  virtual auto isReady() const -> bool = 0;
+};
+```
+
+### IInfoProviderPlugin
+
+Interface for plugins that provide structured information.
+
+```cpp
+class IInfoProviderPlugin : public IPlugin {
+public:
+  virtual auto getProviderId() const -> String = 0;
+  virtual auto collectData(::PluginCache& cache) -> Result<Unit> = 0;
+  virtual auto toJson() const -> Result<String> = 0;
+  virtual auto getFields() const -> Map<String, String> = 0;
+  virtual auto getDisplayValue() const -> Result<String> = 0;
+  virtual auto getDisplayIcon() const -> String = 0;
+  virtual auto getDisplayLabel() const -> String = 0;
+  virtual auto getLastError() const -> Option<String> = 0;
+  virtual auto isEnabled() const -> bool = 0;
+};
+```
+
+**Key methods:**
+
+- `getProviderId()`: Returns unique identifier (e.g., "weather", "media")
+- `collectData()`: Refreshes data from the provider
+- `toJson()`: Serializes data to JSON for `--json` output
+- `getFields()`: Returns key-value pairs for compact format templates
+- `getDisplayValue()`: Returns formatted string for UI display
+- `getDisplayIcon()`: Returns Nerd Font icon for UI
+- `getDisplayLabel()`: Returns label for UI display
+- `getLastError()`: Returns last error from data collection
+- `isEnabled()`: Returns whether the provider is enabled in config
+
+### IOutputFormatPlugin
+
+Interface for plugins that provide output formatting.
+
+```cpp
+class IOutputFormatPlugin : public IPlugin {
+public:
+  virtual auto formatOutput(
+    const String& formatName,
+    const Map<String, String>& data,
+    const Map<String, Map<String, String>>& pluginData
+  ) const -> Result<String> = 0;
+  
+  virtual auto getFormatNames() const -> Vec<String> = 0;
+  virtual auto getFileExtension(const String& formatName) const -> String = 0;
+};
+```
+
+**Key methods:**
+
+- `formatOutput()`: Formats data using the specified format variant
+- `getFormatNames()`: Returns all format names this plugin supports
+- `getFileExtension()`: Returns file extension for a format
+
+## Plugin cache
+
+The `PluginCache` class provides efficient BEVE-based caching for plugin data.
+
+```cpp
+class PluginCache {
+public:
+  template <typename T>
+  auto get(const String& key) const -> Option<T>;
+  
+  template <typename T>
+  auto set(const String& key, const T& value, u32 ttlSeconds = 0) -> void;
+  
+  auto invalidate(const String& key) -> void;
+};
+```
+
+**Example:**
+
+```cpp
+struct WeatherData {
+  String condition;
+  double temperature;
+};
+
+// In plugin's collectData() method
+if (auto cached = cache.get<WeatherData>("current"); cached.has_value()) {
+  // Use cached data
+  m_data = *cached;
+} else {
+  // Fetch fresh data
+  WeatherData data = fetchFromAPI();
+  
+  // Cache for 10 minutes (600 seconds)
+  cache.set("current", data, 600);
+  m_data = data;
+}
+```
+
+## Creating a plugin
+
+Use the `DRAC_PLUGIN` macro to export your plugin:
+
+```cpp
+#include <Drac++/Core/Plugin.hpp>
+
+class MyInfoPlugin : public draconis::core::plugin::IInfoProviderPlugin {
+  // Implement all required virtual methods
+};
+
+// Export the plugin
+DRAC_PLUGIN(MyInfoPlugin)
+```
+
+For static builds, the plugin is automatically registered at startup. For dynamic builds, the macro exports the required C functions for dynamic loading.
+
+## Performance characteristics
+
+- **Lazy loading**: Plugins are loaded only when first accessed
+- **Lock-free reads**: Plugin access is thread-safe without mutexes after initialization
+- **Cache-friendly**: Uses contiguous memory and sorted vectors for fast iteration
+- **Zero-cost abstractions**: When `DRAC_ENABLE_PLUGINS` is disabled, the plugin system compiles to no-ops
+- **Efficient caching**: BEVE binary format for minimal serialization overhead
+
+## Platform support
+
+**Dynamic library extensions:**
+- Windows: `.dll`
+- macOS: `.dylib`
+- Linux/Unix: `.so`
+
+**Required exports:**
+- `CreatePlugin()`: Factory function returning `IPlugin*`
+- `DestroyPlugin(IPlugin*)`: Cleanup function
+- `SetPluginLogLevel(LogLevel*)`: Log level synchronization
